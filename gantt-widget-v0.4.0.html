@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gantt Widget v0.4</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+/**** RESET & BASE ****/
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; color: #333; background: #f5f5f5; }
+
+/**** HEADER ****/
+.header-bar { background: #2c3e50; color: #fff; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.widget-title { font-size: 1.1em; font-weight: 600; }
+.header-controls { display: flex; gap: 8px; align-items: center; }
+.header-btn, .header-select { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; transition: background 0.2s; outline: none; }
+.header-select { appearance: none; padding-right: 24px; background-image: url('data:image/svg+xml;utf8,<svg fill="%23fff" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>'); background-repeat: no-repeat; background-position: right 4px center; background-size: 16px; }
+.header-select option { background: #2c3e50; color: #fff; }
+.header-btn:hover, .header-select:hover { background: rgba(255,255,255,0.25); }
+.header-btn.active { background: #27ae60; border-color: #2ecc71; }
+
+/**** CONTAINER ****/
+.gantt-container { position: relative; display: flex; flex-direction: column; height: calc(100vh - 54px); overflow: auto; }
+.gantt-scroll-area { position: relative; min-width: 100%; display: inline-block; background: #fff; }
+
+/**** HOLIDAYS LAYER ****/
+#gantt-holidays-layer { position: absolute; top: 34px; bottom: 0; left: 160px; right: 0; pointer-events: none; z-index: 1; overflow: hidden; }
+.holiday-block { position: absolute; top: 0; bottom: 0; background: rgba(85, 85, 85, 0.15); border-left: 1px dashed rgba(85, 85, 85, 0.3); border-right: 1px dashed rgba(85, 85, 85, 0.3); }
+
+/**** GANTT TABLE ****/
+#gantt-table { table-layout: fixed; border-collapse: collapse; background: transparent; position: relative; z-index: 2; width: 100%; }
+
+/* En-tête des dates */
+#gantt-table thead td.header-dates { background: #ecf0f1; border-bottom: 2px solid #bdc3c7; padding: 0; height: 34px; position: relative; }
+.month-label { position: absolute; top: 0; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 0.75em; color: #2c3e50; font-weight: 600; border-left: 1px solid #bdc3c7; box-sizing: border-box; overflow: hidden; }
+.month-label:first-child { border-left: none; }
+.year-separator { border-left: 3px solid #34495e !important; }
+
+/* Ligne notion (groupe) */
+tr.notion-row td { background: #d5dbdb; font-weight: 700; color: #2c3e50; border-bottom: 1px solid #bdc3c7; }
+
+/* Ligne d'item */
+tr.gantt-row td { border-bottom: 1px solid #eee; vertical-align: middle; height: 40px; }
+tr.gantt-row:hover td { background: rgba(248, 249, 250, 0.8); }
+
+/* Cellule barre */
+td.gantt-cell { position: relative; padding: 4px 0; }
+
+/* Colonnes notion */
+td.col-notion { width: 160px; min-width: 160px; max-width: 160px; padding: 8px; font-size: 0.9em; font-weight: 600; color: #2c3e50; vertical-align: middle; border-right: 1px solid #e0e0e0; background: #fff; position: sticky; left: 0; z-index: 10; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 2px 0 5px rgba(0,0,0,0.05); }
+
+/* Pleine largeur (sans colonnes) */
+tr.full-width td.gantt-cell { width: 100%; }
+tr.full-width td.col-notion { display: none; }
+
+/**** BARRE DE GANTT ****/
+.gantt-bar { position: absolute; height: 26px; top: 7px; border-radius: 4px; cursor: grab; display: flex; align-items: center; padding: 0 8px; overflow: hidden; z-index: 5; transition: box-shadow 0.15s, transform 0.1s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+.gantt-bar:hover { box-shadow: 0 3px 10px rgba(0,0,0,0.3); z-index: 6; }
+.gantt-bar.selected { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #3498db; z-index: 7; }
+
+/* États */
+.bar-decouverte { background: linear-gradient(135deg, #27ae60, #2ecc71); color: #fff; }
+.bar-approfondissement { background: linear-gradient(135deg, #2980b9, #3498db); color: #fff; }
+.bar-revision   { background: linear-gradient(135deg, #e67e22, #f39c12); color: #fff; }
+.bar-evaluation { background: linear-gradient(135deg, #c0392b, #e74c3c); color: #fff; }
+
+.bar-title { font-size: 0.8em; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+
+/**** TOOLTIP ****/
+#gantt-tooltip { display: none; position: fixed; background: rgba(44,62,80,0.95); color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 0.82em; line-height: 1.5; pointer-events: none; z-index: 9999; max-width: 220px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+
+/**** MODAL D'ÉDITION ****/
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal-overlay.hidden { display: none; }
+.edit-modal { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 24px; width: 420px; max-width: 90vw; z-index: 1001; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+.edit-modal h3 { margin: 0 0 16px; font-size: 1.1em; color: #2c3e50; }
+.form-group { margin-bottom: 12px; }
+.form-group label { display: block; margin-bottom: 4px; font-size: 0.85em; color: #666; font-weight: 500; }
+.form-group input, .form-group select { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 0.9em; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.form-actions button { padding: 6px 16px; border-radius: 4px; border: 1px solid #ddd; cursor: pointer; font-size: 0.9em; }
+#modal-save { background: #2196F3; color: #fff; border-color: #2196F3; }
+#modal-cancel { background: transparent; color: #555; }
+
+/**** TOASTS ****/
+#toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { padding: 10px 18px; border-radius: 6px; font-size: 0.88em; font-weight: 500; color: #fff; opacity: 0; transform: translateX(20px); transition: opacity 0.3s, transform 0.3s; }
+.toast-visible { opacity: 1; transform: translateX(0); }
+.toast-success { background: #27ae60; }
+.toast-error   { background: #e74c3c; }
+
+/**** RESIZE HANDLES ****/
+.resize-handle { position: absolute; top: 0; width: 8px; height: 100%; cursor: ew-resize; z-index: 10; border-radius: 3px; }
+.resize-left  { left: 0; }
+.resize-right { right: 0; }
+
+</style>
+</head>
+<body>
+
+<div class="header-bar">
+    <span class="widget-title">📊 Gantt v0.4</span>
+    <div class="header-controls">
+        <select id="select-years" class="header-select" title="Portée">
+            <option value="1">1 an</option>
+            <option value="2">2 ans</option>
+            <option value="3">3 ans</option>
+        </select>
+        <select id="select-zoom" class="header-select" title="Niveau de détail">
+            <option value="day">Jour</option>
+            <option value="week">Semaine</option>
+            <option value="fortnight">Quinzaine</option>
+        </select>
+        <button class="header-btn active" id="btn-magnet" title="Activer/Désactiver le magnétisme">🧲 Magnétisme : ON</button>
+        <button class="header-btn" id="toggle-cols-btn" title="Afficher/Masquer les colonnes">⋮ Colonnes</button>
+        <button class="header-btn" id="refresh-btn" title="Rafraîchir les données">↻ Actualiser</button>
+    </div>
+</div>
+
+<div class="gantt-container" id="gantt-container">
+    <div class="gantt-scroll-area" id="gantt-scroll-area">
+        <div id="gantt-holidays-layer"></div>
+        <table id="gantt-table"></table>
+    </div>
+</div>
+
+<div id="modal-overlay" class="modal-overlay hidden">
+    <div class="edit-modal">
+        <h3 id="modal-title">Éditer</h3>
+        <div id="modal-warning" style="color: #e74c3c; font-size: 0.85em; margin-bottom: 12px; display: none;"></div>
+        
+        <div class="form-group">
+            <label>Notion</label>
+            <select id="modal-notion"></select>
+        </div>
+        <div class="form-group">
+            <label>Date début</label>
+            <input type="date" id="modal-start">
+        </div>
+        <div class="form-group">
+            <label>Date fin</label>
+            <input type="date" id="modal-end">
+        </div>
+        <div class="form-group">
+            <label>État</label>
+            <select id="modal-etat">
+                <option value="decouverte">Découverte</option>
+                <option value="approfondissement">Approfondissement</option>
+                <option value="revision">Révision</option>
+                <option value="evaluation">Évaluation</option>
+            </select>
+        </div>
+        <input type="hidden" id="modal-row-id">
+        <div class="form-actions">
+            <button id="modal-cancel">Annuler</button>
+            <button id="modal-save">Enregistrer</button>
+        </div>
+    </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+(function() {
+    "use strict";
+
+    // --- CONFIGURATION & ETAT ---
+    var VERSION = "0.4.0";
+    var state = {
+        yearsScope: 1,
+        zoomLevel: 'week',
+        magnetism: true,
+        showColumns: true,
+        baseYear: new Date().getFullYear(),
+        minDate: null,
+        maxDate: null,
+        totalSchoolDays: 0
+    };
+
+    var pxSettings = { day: 30, week: 8, fortnight: 4 };
+
+    var dataStore = {
+        tasks: [],
+        holidays: [],
+        groupedTasks: {},
+        stateRefMap: {}
+    };
+
+    var uiState = {
+        selectedBar: null,
+        currentTableId: null,
+        isDemoMode: false
+    };
+
+    var mappings = { notion: "notion", dateDebut: "dateDebut", dateFin: "dateFin", etat: "etat" };
+
+    // --- UTILITAIRES DE DATES SCOLAIRES ---
+    function parseDate(val) {
+        if (!val) return null;
+        if (typeof val === "number") return new Date(val * 1000);
+        var d = new Date(val);
+        if (!isNaN(d.getTime())) return d;
+        return null;
+    }
+
+    function isSummer(d) {
+        var m = d.getMonth();
+        return m === 6 || m === 7; // Juillet (6) et Août (7)
+    }
+
+    function getSchoolDaysBetween(start, end) {
+        if (!start || !end) return 0;
+        var s = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+        var e = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+        var sign = 1;
+        if (s > e) { var t = s; s = e; e = t; sign = -1; }
+        
+        var days = 0;
+        var cur = new Date(s);
+        while (cur < e) {
+            if (!isSummer(cur)) days++;
+            cur.setDate(cur.getDate() + 1);
+        }
+        return days * sign;
+    }
+
+    function addSchoolDays(date, days) {
+        var d = new Date(date);
+        var added = 0;
+        var step = days > 0 ? 1 : -1;
+        var target = Math.abs(days);
+        
+        while (added < target) {
+            d.setDate(d.getDate() + step);
+            if (!isSummer(d)) added++;
+        }
+        return d;
+    }
+
+    function getNearestMonday(date) {
+        var d = new Date(date);
+        var day = d.getDay();
+        var diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        if (isSummer(d)) {
+            // Si le lundi tombe en été, on force au 1er septembre
+            d = new Date(d.getFullYear() + (d.getMonth() === 7 ? 0 : 1), 8, 1);
+        }
+        return d;
+    }
+
+    // --- INITIALISATION DES BORNES ---
+    function computeBounds() {
+        var earliest = null;
+        dataStore.tasks.forEach(function(t) {
+            var d = parseDate(t[mappings.dateDebut || "dateDebut"]);
+            if (d && (!earliest || d < earliest)) earliest = d;
+        });
+        
+        var refDate = earliest || new Date();
+        state.baseYear = refDate.getMonth() < 8 ? refDate.getFullYear() - 1 : refDate.getFullYear();
+        
+        state.minDate = new Date(state.baseYear, 8, 1); // 1er Sept
+        state.maxDate = new Date(state.baseYear + parseInt(state.yearsScope), 5, 30); // 30 Juin (Fin)
+        state.totalSchoolDays = getSchoolDaysBetween(state.minDate, state.maxDate) + 1;
+    }
+
+    // --- MAPPINGS & REFS ---
+    function detectEtat(etat) {
+        if (!etat) return "Découverte";
+        var e = String(etat).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+        if (e.indexOf("dec") > -1 || e === "d") return "Découverte";
+        if (e.indexOf("app") > -1 || e === "a") return "Approfondissement";
+        if (e.indexOf("rev") > -1 || e === "r") return "Révision";
+        if (e.indexOf("eval") > -1 || e === "e") return "Évaluation";
+        return "Découverte";
+    }
+
+    function formatItem(record) {
+        var notionRaw = record[mappings.notion || "notion"];
+        var etatRaw = record[mappings.etat || "etat"];
+        return {
+            id: record.id,
+            rawNotion: notionRaw,
+            rawEtat: etatRaw,
+            notion: notionRaw ? String(notionRaw) : "Sans notion",
+            dateDebut: record[mappings.dateDebut || "dateDebut"],
+            dateFin: record[mappings.dateFin || "dateFin"],
+            etat: detectEtat(etatRaw)
+        };
+    }
+
+    function buildDataStructures() {
+        dataStore.groupedTasks = {};
+        dataStore.stateRefMap = {};
+        
+        dataStore.tasks.forEach(function(r, idx) {
+            var item = formatItem(r);
+            item._index = idx;
+            item._id = r.id;
+            
+            if (typeof item.rawEtat === "number") {
+                dataStore.stateRefMap[detectEtat(item.etat)] = item.rawEtat;
+            }
+            
+            var key = item.notion;
+            if (!dataStore.groupedTasks[key]) dataStore.groupedTasks[key] = [];
+            dataStore.groupedTasks[key].push(item);
+        });
+    }
+
+    // --- RENDU DOM ---
+    function renderGantt() {
+        computeBounds();
+        buildDataStructures();
+
+        var pxPerDay = pxSettings[state.zoomLevel];
+        var totalWidthPx = state.totalSchoolDays * pxPerDay;
+        
+        // Ajustement CSS pour le conteneur
+        var scrollArea = document.getElementById("gantt-scroll-area");
+        var holidaysLayer = document.getElementById("gantt-holidays-layer");
+        var table = document.getElementById("gantt-table");
+        
+        holidaysLayer.style.left = state.showColumns ? "160px" : "0px";
+        holidaysLayer.style.width = totalWidthPx + "px";
+        table.style.width = (totalWidthPx + (state.showColumns ? 160 : 0)) + "px";
+
+        renderHeader(table, totalWidthPx);
+        renderBody(table, totalWidthPx);
+        renderHolidays(holidaysLayer, totalWidthPx);
+    }
+
+    function renderHeader(table, totalWidthPx) {
+        var oldHead = table.querySelector("thead");
+        if (oldHead) oldHead.remove();
+        
+        var thead = document.createElement("thead");
+        var tr = document.createElement("tr");
+
+        if (state.showColumns) {
+            var th = document.createElement("td");
+            th.className = "col-notion";
+            th.textContent = "Notion";
+            th.style.background = "#bdc3c7";
+            tr.appendChild(th);
+        }
+
+        var tdDates = document.createElement("td");
+        tdDates.className = "header-dates";
+        tdDates.style.width = totalWidthPx + "px";
+        tdDates.style.minWidth = totalWidthPx + "px";
+
+        var cur = new Date(state.minDate);
+        var lastPct = 0;
+        
+        while (cur <= state.maxDate) {
+            if (isSummer(cur)) {
+                cur = new Date(cur.getFullYear(), 8, 1); // Saute en septembre
+                if (cur > state.maxDate) break;
+            }
+            
+            var next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+            var end = next < state.maxDate ? next : new Date(state.maxDate.getTime() + 86400000);
+            
+            var pct = (getSchoolDaysBetween(state.minDate, end) / state.totalSchoolDays) * 100;
+            var div = document.createElement("div");
+            div.className = "month-label" + (cur.getMonth() === 8 && cur.getFullYear() !== state.baseYear ? " year-separator" : "");
+            div.style.left = lastPct + "%";
+            div.style.width = (pct - lastPct) + "%";
+            
+            var mNames = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"];
+            div.textContent = mNames[cur.getMonth()] + " " + cur.getFullYear();
+            tdDates.appendChild(div);
+            
+            lastPct = pct;
+            cur = next;
+        }
+
+        tr.appendChild(tdDates);
+        thead.appendChild(tr);
+        table.appendChild(thead);
+    }
+
+    function renderBody(table, totalWidthPx) {
+        var oldBody = table.querySelector("tbody");
+        if (oldBody) oldBody.remove();
+        var tbody = document.createElement("tbody");
+
+        var keys = Object.keys(dataStore.groupedTasks).sort();
+        keys.forEach(function(notion) {
+            var tr = document.createElement("tr");
+            tr.className = "gantt-row" + (state.showColumns ? "" : " full-width");
+
+            if (state.showColumns) {
+                var tdNotion = document.createElement("td");
+                tdNotion.className = "col-notion";
+                tdNotion.textContent = notion;
+                tdNotion.title = notion;
+                tr.appendChild(tdNotion);
+            }
+
+            var tdCell = document.createElement("td");
+            tdCell.className = "gantt-cell";
+            tdCell.style.width = totalWidthPx + "px";
+
+            dataStore.groupedTasks[notion].forEach(function(item) {
+                var dStart = parseDate(item.dateDebut);
+                var dEnd = parseDate(item.dateFin);
+                if (!dStart || !dEnd) return;
+                
+                // Ne pas afficher si hors zone ou en été (théoriquement bloqué, mais fallback)
+                if (isSummer(dStart) && isSummer(dEnd)) return;
+                
+                var clampStart = dStart < state.minDate ? state.minDate : dStart;
+                var clampEnd = dEnd > state.maxDate ? state.maxDate : dEnd;
+
+                var leftPct = (getSchoolDaysBetween(state.minDate, clampStart) / state.totalSchoolDays) * 100;
+                var widthPct = (getSchoolDaysBetween(clampStart, clampEnd) / state.totalSchoolDays) * 100;
+
+                var etatClass = "bar-" + detectEtat(item.etat).toLowerCase().replace(/é/g, "e").replace(/\s/g, "-");
+                
+                var bar = document.createElement("div");
+                bar.className = "gantt-bar " + etatClass;
+                bar.style.left = leftPct + "%";
+                bar.style.width = Math.max(0.5, widthPct) + "%"; // min width
+                bar.setAttribute("data-id", item._id);
+
+                var title = document.createElement("span");
+                title.className = "bar-title";
+                title.textContent = item.notion;
+                
+                var hl = document.createElement("div"); hl.className = "resize-handle resize-left";
+                var hr = document.createElement("div"); hr.className = "resize-handle resize-right";
+                
+                bar.appendChild(title);
+                bar.appendChild(hl);
+                bar.appendChild(hr);
+
+                // Événements
+                bar.addEventListener("dblclick", function(e) { e.stopPropagation(); openModal(item); });
+                bar.addEventListener("mousedown", function(e) {
+                    if (e.target.classList.contains("resize-handle")) return;
+                    startDrag(e, bar, item, "move");
+                });
+                hl.addEventListener("mousedown", function(e) { e.stopPropagation(); startDrag(e, bar, item, "resize-left"); });
+                hr.addEventListener("mousedown", function(e) { e.stopPropagation(); startDrag(e, bar, item, "resize-right"); });
+
+                tdCell.appendChild(bar);
+            });
+
+            tr.appendChild(tdCell);
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+    }
+
+    function renderHolidays(layer, totalWidthPx) {
+        layer.innerHTML = "";
+        dataStore.holidays.forEach(function(h) {
+            var dStart = parseDate(h.Date_Debut);
+            var dEnd = parseDate(h.Date_Fin);
+            if (!dStart || !dEnd || dEnd < state.minDate || dStart > state.maxDate) return;
+
+            var clampStart = dStart < state.minDate ? state.minDate : dStart;
+            var clampEnd = dEnd > state.maxDate ? state.maxDate : dEnd;
+
+            var leftPct = (getSchoolDaysBetween(state.minDate, clampStart) / state.totalSchoolDays) * 100;
+            var widthPct = (getSchoolDaysBetween(clampStart, clampEnd) / state.totalSchoolDays) * 100;
+
+            var div = document.createElement("div");
+            div.className = "holiday-block";
+            div.style.left = leftPct + "%";
+            div.style.width = widthPct + "%";
+            div.title = h.Nom;
+            layer.appendChild(div);
+        });
+    }
+
+    // --- DRAG & DROP ---
+    var drag = { active: false, bar: null, item: null, type: "", startX: 0, origLeft: 0, origWidth: 0, parentWidth: 0 };
+
+    function startDrag(e, bar, item, type) {
+        e.preventDefault();
+        drag.active = true;
+        drag.bar = bar;
+        drag.item = item;
+        drag.type = type;
+        drag.startX = e.clientX;
+        drag.origLeft = bar.offsetLeft;
+        drag.origWidth = bar.offsetWidth;
+        drag.parentWidth = bar.parentElement.offsetWidth;
+        bar.style.opacity = "0.7";
+        bar.style.zIndex = "100";
+    }
+
+    function onMouseMove(e) {
+        if (!drag.active) return;
+        var dx = e.clientX - drag.startX;
+        if (drag.type === "move") {
+            drag.bar.style.left = (drag.origLeft + dx) + "px";
+        } else if (drag.type === "resize-right") {
+            drag.bar.style.width = Math.max(10, drag.origWidth + dx) + "px";
+        } else if (drag.type === "resize-left") {
+            var newLeft = Math.min(drag.origLeft + drag.origWidth - 10, drag.origLeft + dx);
+            var newWidth = drag.origWidth - (newLeft - drag.origLeft);
+            drag.bar.style.left = newLeft + "px";
+            drag.bar.style.width = newWidth + "px";
+        }
+    }
+
+    async function onMouseUp(e) {
+        if (!drag.active) return;
+        var bar = drag.bar;
+        var item = drag.item;
+        
+        bar.style.opacity = "";
+        bar.style.zIndex = "";
+        drag.active = false;
+
+        var dx = e.clientX - drag.startX;
+        var pxPerDay = pxSettings[state.zoomLevel];
+        var deltaDays = Math.round(dx / pxPerDay);
+
+        if (deltaDays === 0) { renderGantt(); return; } // Reset visual
+
+        var newStart = parseDate(item.dateDebut);
+        var newEnd = parseDate(item.dateFin);
+        var duration = getSchoolDaysBetween(newStart, newEnd);
+
+        if (drag.type === "move") {
+            newStart = addSchoolDays(newStart, deltaDays);
+            
+            // Magnétisme (Bypass avec Shift)
+            if (state.magnetism && !e.shiftKey && state.zoomLevel !== 'day') {
+                newStart = getNearestMonday(newStart);
+            }
+            newEnd = addSchoolDays(newStart, duration);
+        } else if (drag.type === "resize-right") {
+            newEnd = addSchoolDays(newEnd, deltaDays);
+        } else if (drag.type === "resize-left") {
+            newStart = addSchoolDays(newStart, deltaDays);
+            if (newStart > newEnd) newStart = new Date(newEnd);
+        }
+
+        // Sécurité estivale : Rejet si tombe en été
+        if (isSummer(newStart) || isSummer(newEnd)) {
+            showToast("Déplacement refusé : Les dates tombent en été.", "error");
+            renderGantt(); // Reset visuel
+            return;
+        }
+
+        var data = {
+            dateDebut: newStart.toISOString().split('T')[0],
+            dateFin: newEnd.toISOString().split('T')[0]
+        };
+
+        try {
+            if (uiState.currentTableId && !uiState.isDemoMode) {
+                await grist.docApi.applyUserActions([["BulkUpdateRecord", uiState.currentTableId, [item._id], {
+                    [mappings.dateDebut || "dateDebut"]: [data.dateDebut],
+                    [mappings.dateFin || "dateFin"]: [data.dateFin]
+                }]]);
+                showToast("Enregistré !", "success");
+            } else if (uiState.isDemoMode) {
+                item.dateDebut = data.dateDebut;
+                item.dateFin = data.dateFin;
+                showToast("Enregistré (Démo)", "success");
+                renderGantt();
+            }
+        } catch(err) {
+            showToast("Erreur: " + err.message, "error");
+            renderGantt();
+        }
+    }
+
+    // --- MODAL ---
+    function openModal(item) {
+        var modal = document.getElementById("modal-overlay");
+        document.getElementById("modal-title").textContent = "Éditer : " + item.notion;
+        document.getElementById("modal-row-id").value = item._id;
+        
+        var selNotion = document.getElementById("modal-notion");
+        selNotion.innerHTML = "";
+        Object.keys(dataStore.groupedTasks).sort().forEach(function(n) {
+            var o = document.createElement("option"); o.value = n; o.textContent = n;
+            selNotion.appendChild(o);
+        });
+        selNotion.value = item.notion;
+        
+        var ds = parseDate(item.dateDebut);
+        var de = parseDate(item.dateFin);
+        document.getElementById("modal-start").value = ds ? ds.toISOString().split('T')[0] : "";
+        document.getElementById("modal-end").value = de ? de.toISOString().split('T')[0] : "";
+        document.getElementById("modal-etat").value = detectEtat(item.etat).toLowerCase().replace(/é/g,"e").replace(/\s/g,"-");
+        
+        modal._item = item;
+        modal.classList.remove("hidden");
+    }
+
+    document.getElementById("modal-cancel").onclick = function() {
+        document.getElementById("modal-overlay").classList.add("hidden");
+    };
+
+    document.getElementById("modal-save").onclick = async function() {
+        var item = document.getElementById("modal-overlay")._item;
+        var startStr = document.getElementById("modal-start").value;
+        var endStr = document.getElementById("modal-end").value;
+        var notion = document.getElementById("modal-notion").value;
+        var etatVal = document.getElementById("modal-etat").value;
+        
+        var ds = parseDate(startStr);
+        var de = parseDate(endStr);
+        
+        if (!ds || !de) { showToast("Dates invalides", "error"); return; }
+        if (de < ds) { showToast("La fin doit être après le début", "error"); return; }
+        if (isSummer(ds) || isSummer(de)) { showToast("Saisie refusée : Dates en été", "error"); return; }
+
+        var etatMap = { "decouverte": "Découverte", "approfondissement": "Approfondissement", "revision": "Révision", "evaluation": "Évaluation" };
+        var finalEtat = etatMap[etatVal];
+        
+        var payload = {
+            [mappings.dateDebut || "dateDebut"]: [startStr],
+            [mappings.dateFin || "dateFin"]: [endStr]
+        };
+        
+        if (notion !== item.notion) payload[mappings.notion || "notion"] = [notion];
+        if (detectEtat(item.etat) !== finalEtat) {
+            if (typeof item.rawEtat === "number") {
+                if (dataStore.stateRefMap[finalEtat]) payload[mappings.etat || "etat"] = [dataStore.stateRefMap[finalEtat]];
+                else { showToast("ID Ref Etat introuvable", "error"); return; }
+            } else {
+                payload[mappings.etat || "etat"] = [finalEtat];
+            }
+        }
+
+        try {
+            if (uiState.currentTableId && !uiState.isDemoMode) {
+                await grist.docApi.applyUserActions([["BulkUpdateRecord", uiState.currentTableId, [item._id], payload]]);
+                showToast("Modifications enregistrées", "success");
+            } else if (uiState.isDemoMode) {
+                item.dateDebut = startStr; item.dateFin = endStr; item.notion = notion; item.etat = finalEtat;
+                renderGantt();
+            }
+            document.getElementById("modal-cancel").onclick();
+        } catch(err) { showToast(err.message, "error"); }
+    };
+
+    // --- UTILS & UI EVENTS ---
+    function showToast(msg, type) {
+        var c = document.getElementById("toast-container");
+        var t = document.createElement("div");
+        t.className = "toast toast-" + type; t.textContent = msg;
+        c.appendChild(t);
+        t.offsetHeight; t.classList.add("toast-visible");
+        setTimeout(function() { t.classList.remove("toast-visible"); setTimeout(function(){t.remove();},300); }, 3000);
+    }
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+
+    // Contrôles UI
+    document.getElementById("select-years").addEventListener("change", function(e) {
+        state.yearsScope = e.target.value;
+        if (!uiState.isDemoMode) grist.setOption('yearsScope', state.yearsScope);
+        renderGantt();
+    });
+    document.getElementById("select-zoom").addEventListener("change", function(e) {
+        state.zoomLevel = e.target.value;
+        if (!uiState.isDemoMode) grist.setOption('zoomLevel', state.zoomLevel);
+        renderGantt();
+    });
+    document.getElementById("btn-magnet").addEventListener("click", function(e) {
+        state.magnetism = !state.magnetism;
+        e.target.textContent = "🧲 Magnétisme : " + (state.magnetism ? "ON" : "OFF");
+        e.target.className = "header-btn " + (state.magnetism ? "active" : "");
+        if (!uiState.isDemoMode) grist.setOption('magnetism', state.magnetism);
+    });
+    document.getElementById("toggle-cols-btn").addEventListener("click", function() {
+        state.showColumns = !state.showColumns;
+        renderGantt();
+    });
+    document.getElementById("refresh-btn").addEventListener("click", initData);
+
+    // --- INIT ---
+    async function initData() {
+        if (uiState.isDemoMode) {
+            dataStore.tasks = [
+                { id: 1, notion: "Chapitre 1", dateDebut: "2026-09-02", dateFin: "2026-09-15", etat: "Découverte" },
+                { id: 2, notion: "Chapitre 2", dateDebut: "2026-09-16", dateFin: "2026-09-30", etat: "Approfondissement" }
+            ];
+            dataStore.holidays = [
+                { Nom: "Toussaint", Date_Debut: "2026-10-18", Date_Fin: "2026-11-03" }
+            ];
+            renderGantt();
+            return;
+        }
+
+        try {
+            var options = await grist.getOptions();
+            if (options) {
+                if (options.yearsScope) { state.yearsScope = options.yearsScope; document.getElementById("select-years").value = state.yearsScope; }
+                if (options.zoomLevel) { state.zoomLevel = options.zoomLevel; document.getElementById("select-zoom").value = state.zoomLevel; }
+                if (options.magnetism !== undefined) { 
+                    state.magnetism = options.magnetism;
+                    var btn = document.getElementById("btn-magnet");
+                    btn.textContent = "🧲 Magnétisme : " + (state.magnetism ? "ON" : "OFF");
+                    btn.className = "header-btn " + (state.magnetism ? "active" : "");
+                }
+            }
+        } catch(e) {}
+
+        try {
+            var holRecords = await grist.docApi.fetchTable('Vacances');
+            dataStore.holidays = Object.keys(holRecords.id).map(function(idx) {
+                return {
+                    Nom: holRecords.Nom[idx],
+                    Date_Debut: holRecords.Date_Debut[idx],
+                    Date_Fin: holRecords.Date_Fin[idx]
+                };
+            });
+        } catch(e) {
+            console.warn("Table Vacances non trouvée ou erreur:", e);
+            dataStore.holidays = [];
+        }
+
+        grist.fetchTable(function(records) {
+            dataStore.tasks = records;
+            renderGantt();
+        });
+    }
+
+    function initGrist() {
+        if (typeof grist === "undefined" || !grist) {
+            uiState.isDemoMode = true;
+            initData();
+        } else {
+            grist.ready({ requiredAccess: "full" });
+            grist.onRecords(function(records, m) {
+                if (m) mappings = m;
+                dataStore.tasks = records;
+                renderGantt(); // Rend temporairement, sera affiné par fetchTable
+            });
+            grist.selectedTable.getTableId().then(function(id) {
+                uiState.currentTableId = id;
+                initData();
+            });
+        }
+    }
+
+    document.addEventListener("DOMContentLoaded", initGrist);
+})();
+</script>
+</body>
+</html>
