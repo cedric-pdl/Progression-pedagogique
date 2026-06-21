@@ -235,6 +235,7 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
         holidays: [],
         groupedTasks: {},
         stateRefMap: {},
+        notionRefMap: {},
         allRecords: []
     };
 
@@ -365,11 +366,17 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
 
     function buildRefMaps(records) {
         dataStore.stateRefMap = {};
+        dataStore.notionRefMap = {};
         for (var i = 0; i < records.length; i++) {
             var r = mapColumnNames(records[i]);
+            // Mappage pour Etat
             if (typeof r.rawEtat === "number") {
                 var normalized = detectEtat(r.etat);
                 dataStore.stateRefMap[normalized] = r.rawEtat;
+            }
+            // Mappage pour Notion (colonne de type Référence)
+            if (typeof r.rawNotion === "number") {
+                dataStore.notionRefMap[r.notion] = r.rawNotion;
             }
         }
     }
@@ -861,22 +868,34 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
         if (searchIn) {
             searchIn.value = "";
             var isNotionRef = typeof item.rawNotion === "number";
-            searchIn.disabled = isNotionRef;
-            searchIn.style.display = isNotionRef ? "none" : "block";
+            // Pour les colonnes Référence, on peut toujours rechercher, mais on ne peut pas saisir de texte libre
+            searchIn.disabled = false;
+            searchIn.style.display = "block";
         }
         
         // Vider et remplir le select avec toutes les notions
         notionIn.innerHTML = "";
         var uniqueNotions = Object.keys(dataStore.groupedTasks).sort();
+        var isNotionRefColumn = typeof item.rawNotion === "number";
+        
         for (var i = 0; i < uniqueNotions.length; i++) {
             var opt = document.createElement("option");
-            opt.value = uniqueNotions[i];
+            // Si c'est une colonne Référence, utiliser l'ID numérique, sinon le texte
+            if (isNotionRefColumn && dataStore.notionRefMap[uniqueNotions[i]]) {
+                opt.value = dataStore.notionRefMap[uniqueNotions[i]];  // ID numérique
+            } else {
+                opt.value = uniqueNotions[i];  // Texte
+            }
             opt.textContent = uniqueNotions[i];
             notionIn.appendChild(opt);
         }
         
-        // Sélectionner la notion de l'item
-        notionIn.value = item.notion || "";
+        // Sélectionner la notion de l'item (utiliser rawNotion si c'est une Ref)
+        if (isNotionRefColumn) {
+            notionIn.value = item.rawNotion || "";
+        } else {
+            notionIn.value = item.notion || "";
+        }
         
         var dStart = parseDate(item.dateDebut);
         var dEnd = parseDate(item.dateFin);
@@ -886,12 +905,12 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
         etatIn.value = detectEtat(item.etat).toLowerCase().replace(/é/g, "e").replace(/\s/g, "-");
         rowIdIn.value = item._id || "";
         
-        // Verrouille la saisie de texte libre si "Notion" est une Référence
-        var isNotionRef = typeof item.rawNotion === "number";
-        notionIn.disabled = isNotionRef;
+        // Verrouille le sélecteur si "Notion" est une Référence
+        // On ne peut pas modifier la référence, mais on peut voir et sélectionner parmi les valeurs existantes
+        notionIn.disabled = isNotionRefColumn;
 
-        if (isNotionRef) {
-            warning.textContent = "⚠️ Colonne Notion (Ref) : la modification du nom est bloquée pour préserver la structure Grist.";
+        if (isNotionRefColumn) {
+            warning.textContent = "⚠️ Colonne Notion (Ref) : la modification est limitée aux valeurs existantes pour préserver la structure Grist.";
             warning.style.display = "block";
         } else {
             warning.style.display = "none";
@@ -941,10 +960,21 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
 
         // On intègre Notion uniquement si le champ n'est pas bloqué et qu'il a changé
         if (!notionIn.disabled) {
-            var notion = notionIn.value;
-            if (!notion) { showToast("La notion est requise.", "error"); return; }
-            if (notion !== item.notion) {
-                data[uiState.globalMappings.notion || "notion"] = notion;
+            var notionValue = notionIn.value;
+            if (!notionValue) { showToast("La notion est requise.", "error"); return; }
+            // Pour les colonnes Référence, notionValue est déjà l'ID numérique
+            // Pour les colonnes Texte, notionValue est le texte
+            var isNotionRefColumn = typeof item.rawNotion === "number";
+            if (isNotionRefColumn) {
+                // C'est une colonne Référence, notionValue contient déjà l'ID
+                if (notionValue !== item.rawNotion) {
+                    data[uiState.globalMappings.notion || "notion"] = notionValue;
+                }
+            } else {
+                // C'est une colonne Texte
+                if (notionValue !== item.notion) {
+                    data[uiState.globalMappings.notion || "notion"] = notionValue;
+                }
             }
         }
 
@@ -972,7 +1002,22 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
                 await writeToGrist(rowId, data);
                 showToast("Enregistré dans Grist !", "success");
             } else if (uiState.isDemoMode) {
-                if (data[uiState.globalMappings.notion || "notion"]) item.notion = data[uiState.globalMappings.notion || "notion"];
+                if (data[uiState.globalMappings.notion || "notion"]) {
+                    // En mode démo, si c'est une Ref, on garde rawNotion, sinon on met à jour notion
+                    var isNotionRefColumn = typeof item.rawNotion === "number";
+                    if (isNotionRefColumn) {
+                        item.rawNotion = data[uiState.globalMappings.notion || "notion"];
+                        // Trouver le nom correspondant pour l'affichage
+                        for (var notionName in dataStore.notionRefMap) {
+                            if (dataStore.notionRefMap[notionName] == data[uiState.globalMappings.notion || "notion"]) {
+                                item.notion = notionName;
+                                break;
+                            }
+                        }
+                    } else {
+                        item.notion = data[uiState.globalMappings.notion || "notion"];
+                    }
+                }
                 if (data[uiState.globalMappings.etat || "etat"]) item.etat = data[uiState.globalMappings.etat || "etat"];
                 item.dateDebut = startStr;
                 item.dateFin = endStr;
@@ -1205,10 +1250,22 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
                 
                 notionSelect.innerHTML = "";
                 
+                // Déterminer si la colonne Notion est de type Référence
+                // On utilise le premier item pour vérifier
+                var firstItem = dataStore.allRecords[0];
+                if (!firstItem) return;
+                var firstMapped = mapColumnNames(firstItem);
+                var isNotionRefColumn = typeof firstMapped.rawNotion === "number";
+                
                 for (var i = 0; i < uniqueNotions.length; i++) {
                     if (uniqueNotions[i].toLowerCase().indexOf(filterText) > -1) {
                         var opt = document.createElement("option");
-                        opt.value = uniqueNotions[i];
+                        // Si c'est une colonne Référence, utiliser l'ID numérique
+                        if (isNotionRefColumn && dataStore.notionRefMap[uniqueNotions[i]]) {
+                            opt.value = dataStore.notionRefMap[uniqueNotions[i]];
+                        } else {
+                            opt.value = uniqueNotions[i];
+                        }
                         opt.textContent = uniqueNotions[i];
                         notionSelect.appendChild(opt);
                     }
