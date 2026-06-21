@@ -236,6 +236,7 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
         groupedTasks: {},
         stateRefMap: {},
         notionRefMap: {},
+        notionsList: [],  // Liste des notions avec leurs IDs (pour les colonnes Référence)
         allRecords: []
     };
 
@@ -362,6 +363,78 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
             dateFin: record[uiState.globalMappings.dateFin || "dateFin"],
             etat: etatDisplay ? String(etatDisplay) : "Découverte"
         };
+    }
+
+    // --- CHARGEMENT DES NOTIONS (pour les colonnes Référence) ---
+    async function loadNotionsTable() {
+        if (uiState.isDemoMode) {
+            // En mode démo, créer des données fictives
+            dataStore.notionsList = [
+                { id: 1, name: "Chapitre 1" },
+                { id: 2, name: "Chapitre 2" },
+                { id: 3, name: "Algèbre" },
+                { id: 4, name: "Géométrie" },
+                { id: 5, name: "Analyse" },
+                { id: 6, name: "Statistiques" }
+            ];
+            return;
+        }
+
+        try {
+            // Essayer de récupérer la table Notions
+            // Note: Le nom de la table peut être différent selon votre configuration
+            // Essayons d'abord avec 'Notions', puis avec d'autres noms courants
+            var notionsTable;
+            try {
+                notionsTable = await grist.docApi.fetchTable('Notions');
+            } catch(e1) {
+                try {
+                    notionsTable = await grist.docApi.fetchTable('Notion');
+                } catch(e2) {
+                    try {
+                        notionsTable = await grist.docApi.fetchTable('Matières');
+                    } catch(e3) {
+                        console.warn("Aucune table Notions/Notion/Matières trouvée, utilisation des données existantes");
+                        notionsTable = null;
+                    }
+                }
+            }
+            
+            if (notionsTable) {
+                dataStore.notionsList = Object.keys(notionsTable.id).map(function(idx) {
+                    // Trouver le nom de la notion (colonne 'name' ou 'Nom' ou 'notion')
+                    var name = notionsTable.name ? notionsTable.name[idx] : 
+                               notionsTable.Nom ? notionsTable.Nom[idx] :
+                               notionsTable.notion ? notionsTable.notion[idx] :
+                               String(notionsTable.id[idx]);
+                    return {
+                        id: notionsTable.id[idx],
+                        name: name
+                    };
+                });
+            } else {
+                // Fallback : utiliser les notions des tâches existantes
+                dataStore.notionsList = [];
+                dataStore.allRecords.forEach(function(record) {
+                    var mapped = mapColumnNames(record);
+                    if (mapped.rawNotion && mapped.notion) {
+                        // Vérifier si cette notion est déjà dans la liste
+                        var exists = dataStore.notionsList.some(function(n) {
+                            return n.id === mapped.rawNotion || n.name === mapped.notion;
+                        });
+                        if (!exists) {
+                            dataStore.notionsList.push({
+                                id: mapped.rawNotion,
+                                name: mapped.notion
+                            });
+                        }
+                    }
+                });
+            }
+        } catch(err) {
+            console.error("Erreur lors du chargement des notions:", err);
+            dataStore.notionsList = [];
+        }
     }
 
     function buildRefMaps(records) {
@@ -875,18 +948,33 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
         
         // Vider et remplir le select avec toutes les notions
         notionIn.innerHTML = "";
-        var uniqueNotions = Object.keys(dataStore.groupedTasks).sort();
         var isNotionRefColumn = typeof item.rawNotion === "number";
         
-        for (var i = 0; i < uniqueNotions.length; i++) {
+        // Utiliser dataStore.notionsList si disponible, sinon les notions groupées
+        var notionsToUse = [];
+        if (dataStore.notionsList.length > 0) {
+            notionsToUse = dataStore.notionsList;
+        } else {
+            // Fallback : utiliser les notions des tâches existantes
+            var uniqueNotions = Object.keys(dataStore.groupedTasks).sort();
+            notionsToUse = uniqueNotions.map(function(name) {
+                return {
+                    id: dataStore.notionRefMap[name] || name,
+                    name: name
+                };
+            });
+        }
+        
+        for (var i = 0; i < notionsToUse.length; i++) {
+            var notion = notionsToUse[i];
             var opt = document.createElement("option");
             // Si c'est une colonne Référence, utiliser l'ID numérique, sinon le texte
-            if (isNotionRefColumn && dataStore.notionRefMap[uniqueNotions[i]]) {
-                opt.value = dataStore.notionRefMap[uniqueNotions[i]];  // ID numérique
+            if (isNotionRefColumn) {
+                opt.value = notion.id;  // ID numérique
             } else {
-                opt.value = uniqueNotions[i];  // Texte
+                opt.value = notion.name || notion.id;  // Texte
             }
-            opt.textContent = uniqueNotions[i];
+            opt.textContent = notion.name || notion.id;
             notionIn.appendChild(opt);
         }
         
@@ -1110,6 +1198,8 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
                 { Nom: "Toussaint", Date_Debut: "2026-10-18", Date_Fin: "2026-11-03" },
                 { Nom: "Noël", Date_Debut: "2026-12-20", Date_Fin: "2027-01-05" }
             ];
+            // Charger les notions en mode démo
+            await loadNotionsTable();
             renderGantt();
             return;
         }
@@ -1147,6 +1237,9 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
             console.warn("Table Vacances non trouvée ou erreur:", e);
             dataStore.holidays = [];
         }
+
+        // Charger la table des Notions pour les colonnes Référence
+        await loadNotionsTable();
 
         // Charger les données principales
         if (typeof grist !== "undefined" && grist && grist.fetchTable) {
@@ -1246,27 +1339,39 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
             searchIn.addEventListener("input", function(e) {
                 var filterText = e.target.value.toLowerCase();
                 var notionSelect = document.getElementById("modal-notion");
-                var uniqueNotions = Object.keys(dataStore.groupedTasks).sort();
                 
                 notionSelect.innerHTML = "";
                 
                 // Déterminer si la colonne Notion est de type Référence
-                // On utilise le premier item pour vérifier
                 var firstItem = dataStore.allRecords[0];
-                if (!firstItem) return;
-                var firstMapped = mapColumnNames(firstItem);
-                var isNotionRefColumn = typeof firstMapped.rawNotion === "number";
+                var isNotionRefColumn = firstItem ? typeof mapColumnNames(firstItem).rawNotion === "number" : false;
                 
-                for (var i = 0; i < uniqueNotions.length; i++) {
-                    if (uniqueNotions[i].toLowerCase().indexOf(filterText) > -1) {
+                // Utiliser dataStore.notionsList si disponible
+                var notionsToUse = [];
+                if (dataStore.notionsList.length > 0) {
+                    notionsToUse = dataStore.notionsList;
+                } else {
+                    // Fallback : utiliser les notions groupées
+                    var uniqueNotions = Object.keys(dataStore.groupedTasks).sort();
+                    notionsToUse = uniqueNotions.map(function(name) {
+                        return {
+                            id: dataStore.notionRefMap[name] || name,
+                            name: name
+                        };
+                    });
+                }
+                
+                for (var i = 0; i < notionsToUse.length; i++) {
+                    var notion = notionsToUse[i];
+                    if ((notion.name || notion.id).toLowerCase().indexOf(filterText) > -1) {
                         var opt = document.createElement("option");
                         // Si c'est une colonne Référence, utiliser l'ID numérique
-                        if (isNotionRefColumn && dataStore.notionRefMap[uniqueNotions[i]]) {
-                            opt.value = dataStore.notionRefMap[uniqueNotions[i]];
+                        if (isNotionRefColumn) {
+                            opt.value = notion.id;
                         } else {
-                            opt.value = uniqueNotions[i];
+                            opt.value = notion.name || notion.id;
                         }
-                        opt.textContent = uniqueNotions[i];
+                        opt.textContent = notion.name || notion.id;
                         notionSelect.appendChild(opt);
                     }
                 }
