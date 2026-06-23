@@ -1,0 +1,1948 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gantt Widget v0.4.29g</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+/**** RESET & BASE ****/
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; color: #333; background: #f5f5f5; }
+
+/**** HEADER ****/
+.header-bar { background: #2c3e50; color: #fff; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.widget-title { font-size: 1.1em; font-weight: 600; }
+.header-controls { display: flex; gap: 8px; align-items: center; }
+.header-btn, .header-select { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; transition: background 0.2s; outline: none; }
+.header-select { appearance: none; padding-right: 24px; background-image: url('data:image/svg+xml;utf8,<svg fill="%23fff" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>'); background-repeat: no-repeat; background-position: right 4px center; background-size: 16px; }
+.header-select option { background: #2c3e50; color: #fff; }
+.header-btn:hover, .header-select:hover { background: rgba(255,255,255,0.25); }
+.header-btn.active { background: #27ae60; border-color: #2ecc71; }
+#btn-view-mode { background: #8e44ad; border-color: #9b59b6; }
+#btn-view-mode:hover { background: #9b59b6; }
+
+/**** CONTAINER ****/
+.gantt-container { position: relative; display: flex; flex-direction: column; height: calc(100vh - 54px); overflow: auto; }
+.gantt-scroll-area { position: relative; min-width: 100%; display: inline-block; background: #fff; }
+
+/**** HOLIDAYS LAYER ****/
+#gantt-holidays-layer { position: absolute; top: 34px; bottom: 0; left: 160px; right: 0; pointer-events: none; z-index: 1; overflow: hidden; }
+.holiday-block { position: absolute; top: 0; bottom: 0; background: rgba(85, 85, 85, 0.15); border-left: 1px dashed rgba(85, 85, 85, 0.3); border-right: 1px dashed rgba(85, 85, 85, 0.3); }
+
+/**** GANTT TABLE ****/
+#gantt-table { table-layout: fixed; border-collapse: collapse; background: transparent; position: relative; z-index: 2; width: 100%; }
+
+/* En-tête des dates */
+#gantt-table thead td.header-dates { background: #ecf0f1; border-bottom: 2px solid #bdc3c7; padding: 0; height: 34px; position: relative; }
+.month-label { position: absolute; top: 0; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 0.75em; color: #2c3e50; font-weight: 600; border-left: 1px solid #bdc3c7; box-sizing: border-box; overflow: hidden; }
+.month-label:first-child { border-left: none; }
+.year-separator { border-left: 3px solid #34495e !important; }
+
+/* Ligne notion (groupe) */
+tr.notion-row td { background: #d5dbdb; font-weight: 700; color: #2c3e50; border-bottom: 1px solid #bdc3c7; }
+
+/* Ligne d'item */
+tr.gantt-row td { border-bottom: 1px solid #eee; vertical-align: middle; height: 40px; }
+tr.gantt-row:hover td { background: rgba(248, 249, 250, 0.8); }
+
+/* Cellule barre */
+td.gantt-cell { position: relative; padding: 4px 0; }
+
+/* Colonnes notion / sequence */
+td.col-notion { width: 160px; min-width: 160px; max-width: 160px; padding: 8px; font-size: 0.9em; font-weight: 600; color: #2c3e50; vertical-align: middle; border-right: 1px solid #e0e0e0; background: #fff; position: sticky; left: 0; z-index: 10; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 2px 0 5px rgba(0,0,0,0.05); }
+
+/* Pleine largeur (sans colonnes) */
+tr.full-width td.gantt-cell { width: 100%; }
+tr.full-width td.col-notion { display: none; }
+
+/**** BARRE DE GANTT ****/
+.gantt-bar { position: absolute; height: 26px; top: 7px; border-radius: 4px; cursor: grab; display: flex; align-items: center; padding: 0 8px; overflow: hidden; z-index: 5; transition: box-shadow 0.15s, transform 0.1s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+.gantt-bar:hover { box-shadow: 0 3px 10px rgba(0,0,0,0.3); z-index: 6; }
+.gantt-bar.selected { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #3498db; z-index: 7; }
+
+/* États pour Notions */
+.bar-decouverte { background: linear-gradient(135deg, #27ae60, #2ecc71); color: #fff; }
+.bar-approfondissement { background: linear-gradient(135deg, #2980b9, #3498db); color: #fff; }
+.bar-revision   { background: linear-gradient(135deg, #e67e22, #f39c12); color: #fff; }
+.bar-evaluation { background: linear-gradient(135deg, #c0392b, #e74c3c); color: #fff; }
+
+/* État générique pour Séquence */
+.bar-sequence { background: linear-gradient(135deg, #8e44ad, #9b59b6); color: #fff; }
+
+.bar-title { font-size: 0.8em; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+
+/**** TOOLTIP ****/
+#gantt-tooltip { display: none; position: fixed; background: rgba(44,62,80,0.95); color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 0.82em; line-height: 1.5; pointer-events: none; z-index: 9999; max-width: 220px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+
+/**** FOOTER / LÉGENDE ****/
+#gantt-table tfoot td { background: #ecf0f1; border-top: 2px solid #bdc3c7; padding: 6px 12px; }
+td.footer-info { font-size: 0.8em; color: #555; vertical-align: middle; }
+td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 5px; font-size: 0.78em; color: #555; }
+.legend-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.legend-item.decouverte .legend-dot { background: #27ae60; }
+.legend-item.approfondissement .legend-dot { background: #2980b9; }
+.legend-item.revision .legend-dot { background: #e67e22; }
+.legend-item.evaluation .legend-dot { background: #c0392b; }
+.legend-item.sequence .legend-dot { background: #8e44ad; }
+.version-badge { font-size: 0.72em; color: #999; margin-left: auto; }
+
+/**** MODAL D'ÉDITION ****/
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal-overlay.hidden { display: none; }
+.edit-modal { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 24px; width: 420px; max-width: 90vw; z-index: 1001; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+.edit-modal h3 { margin: 0 0 16px; font-size: 1.1em; color: #2c3e50; }
+.form-group { margin-bottom: 12px; }
+.form-group label { display: block; margin-bottom: 4px; font-size: 0.85em; color: #666; font-weight: 500; }
+.form-group input, .form-group select { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 0.9em; }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,0.2); }
+.form-group input:disabled, .form-group select:disabled { background: #f0f0f0; cursor: not-allowed; color: #999; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.form-actions button { padding: 6px 16px; border-radius: 4px; border: 1px solid #ddd; cursor: pointer; font-size: 0.9em; transition: background 0.2s; }
+#modal-save { background: #2196F3; color: #fff; border-color: #2196F3; }
+#modal-save:hover { background: #1976D1; }
+#modal-cancel { background: transparent; color: #555; }
+#modal-cancel:hover { background: #f0f0f0; }
+#modal-delete { background: #e74c3c; color: #fff; border-color: #c0392b; }
+#modal-delete:hover { background: #c0392b; }
+
+/**** TOASTS ****/
+#toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { padding: 10px 18px; border-radius: 6px; font-size: 0.88em; font-weight: 500; color: #fff; opacity: 0; transform: translateX(20px); transition: opacity 0.3s, transform 0.3s; }
+.toast-visible { opacity: 1; transform: translateX(0); }
+.toast-success { background: #27ae60; }
+.toast-error   { background: #e74c3c; }
+
+/**** RESIZE HANDLES ****/
+.resize-handle { position: absolute; top: 0; width: 8px; height: 100%; cursor: ew-resize; z-index: 10; border-radius: 3px; }
+.resize-handle:hover { background: rgba(255,255,255,0.3); }
+.resize-left  { left: 0; }
+.resize-right { right: 0; }
+
+/**** SCROLLBAR ****/
+.gantt-container::-webkit-scrollbar { height: 8px; width: 8px; }
+.gantt-container::-webkit-scrollbar-track { background: #ecf0f1; }
+.gantt-container::-webkit-scrollbar-thumb { background: #bdc3c7; border-radius: 4px; }
+.gantt-container::-webkit-scrollbar-thumb:hover { background: #95a5a6; }
+
+/**** LOADING ****/
+.loading-overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.8); z-index: 2000; display: flex; align-items: center; justify-content: center; }
+.loading-overlay.hidden { display: none; }
+.spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+/**** GROUPES REPLIABLES ****/
+.group-header-row { background: #34495e; color: #fff; }
+.group-header-row td { padding: 8px 12px; font-weight: 600; border-bottom: 2px solid #2c3e50; }
+.group-header-cell { position: sticky; left: 0; z-index: 15; background: #34495e; }
+.group-toggle { cursor: pointer; display: inline-block; width: 20px; text-align: center; font-size: 0.8em; margin-right: 8px; user-select: none; }
+.group-toggle:hover { opacity: 0.8; }
+.group-content-row { display: table-row; }
+.group-content-row.hidden { display: none; }
+.group-indent { padding-left: 24px !important; }
+</style>
+</head>
+<body>
+
+<div class="header-bar">
+    <span class="widget-title">📊 Gantt v0.4.18g</span>
+    <div class="header-controls">
+        <button class="header-btn active" id="btn-view-mode" title="Basculer la vue">👁️ Vue : Notions</button>
+        <select id="select-years" class="header-select" title="Portée">
+            <option value="1">1 an</option>
+            <option value="2">2 ans</option>
+            <option value="3">3 ans</option>
+        </select>
+        <select id="select-zoom" class="header-select" title="Niveau de détail">
+            <option value="day">Jour</option>
+            <option value="week">Semaine</option>
+            <option value="fortnight">Quinzaine</option>
+            <option value="month">Mois</option>
+        </select>
+        <button class="header-btn active" id="btn-magnet" title="Activer/Désactiver le magnétisme">🧲 Magnétisme : ON</button>
+        <button class="header-btn" id="toggle-cols-btn" title="Afficher/Masquer les colonnes">⋮ Colonnes</button>
+        <button class="header-btn" id="refresh-btn" title="Rafraîchir les données">↻ Actualiser</button>
+    </div>
+</div>
+
+<div class="gantt-container" id="gantt-container">
+    <div class="gantt-scroll-area" id="gantt-scroll-area">
+        <div id="gantt-holidays-layer"></div>
+        <table id="gantt-table"></table>
+    </div>
+</div>
+
+<div id="modal-overlay" class="modal-overlay hidden">
+    <div class="edit-modal">
+        <h3 id="modal-title">Éditer</h3>
+        <div id="modal-warning" style="color: #e74c3c; font-size: 0.85em; margin-bottom: 12px; display: none;"></div>
+        
+        <div class="form-group">
+            <label id="label-modal-notion-search" for="modal-notion-search">Rechercher une notion</label>
+            <input type="text" id="modal-notion-search" placeholder="🔍 Rechercher ou créer..." style="margin-bottom: 6px;">
+            <select id="modal-notion"></select>
+        </div>
+        <div class="form-group">
+            <label for="modal-start">Date début</label>
+            <input type="date" id="modal-start">
+        </div>
+        <div class="form-group">
+            <label for="modal-end">Date fin</label>
+            <input type="date" id="modal-end">
+        </div>
+        <div class="form-group" id="form-group-etat">
+            <label for="modal-etat">État</label>
+            <select id="modal-etat">
+                <option value="decouverte">Découverte</option>
+                <option value="approfondissement">Approfondissement</option>
+                <option value="revision">Révision</option>
+                <option value="evaluation">Évaluation</option>
+            </select>
+        </div>
+        <input type="hidden" id="modal-row-id">
+        <div class="form-actions">
+            <button id="modal-delete" style="margin-right: auto;">Supprimer</button>
+            <button id="modal-cancel">Annuler</button>
+            <button id="modal-save">Enregistrer</button>
+        </div>
+    </div>
+</div>
+
+<div id="toast-container"></div>
+<div id="loading-overlay" class="loading-overlay hidden">
+    <div style="text-align: center;">
+        <div class="spinner"></div>
+        <div style="margin-top: 12px; color: #2c3e50; font-weight: 500;">Chargement des données...</div>
+    </div>
+</div>
+
+<script>
+(function() {
+    "use strict";
+
+    // --- CONSTANTES ---
+    var VERSION = "0.4.29g";
+    var CELL_WIDTH_DAYS = 30;
+    var SUMMER_MONTHS = [6, 7]; // Juillet (6) et Août (7)
+    
+    // Configuration des colonnes pour Grist
+    var COLUMN_CONFIG = [
+        { name: "notion", type: "Any", title: "Colonne Notion (Réf ou Texte)", optional: true },
+        { name: "notionTxt", type: "Text", title: "Texte de la Notion (Formule, optionnel)", optional: true },
+        { name: "sequence", type: "Any", title: "Colonne Séquence (Réf ou Texte)", optional: true },
+        { name: "sequenceTxt", type: "Text", title: "Texte de la Séquence (Formule, optionnel)", optional: true },
+        { name: "domaine", type: "Any", title: "Colonne Domaine (Réf ou Texte)", optional: true },
+        { name: "domaineTxt", type: "Text", title: "Texte du Domaine (Formule, optionnel)", optional: true },
+        { name: "dateDebut", type: "Date", title: "Colonne Date de début" },
+        { name: "dateFin", type: "Date", title: "Colonne Date de fin" },
+        { name: "etat", type: "Any", title: "Colonne État (Réf ou Texte)", optional: true },
+        { name: "etatTxt", type: "Text", title: "Texte de l'État (Formule, optionnel)", optional: true },
+        { name: "groupe", type: "Any", title: "Colonne Groupe (Optionnel)", optional: true }
+    ];
+
+    // --- ÉTAT GLOBAL ---
+    var state = {
+        yearsScope: 1,
+        zoomLevel: 'week',
+        magnetism: true,
+        showColumns: true,
+        viewMode: 'notions', // 'notions' ou 'sequences'
+        baseYear: new Date().getFullYear(),
+        minDate: null,
+        maxDate: null,
+        totalSchoolDays: 0
+    };
+
+    var pxSettings = { day: 30, week: 8, fortnight: 4, month: 2 };
+
+    // --- STOCKAGE DES DONNÉES ---
+    var dataStore = {
+        tasks: [],
+        holidays: [],
+        groupedTasks: {},
+        stateRefMap: {},
+        notionRefMap: {},
+        sequenceRefMap: {},
+        notionsList: [],
+        sequencesList: [],
+        allRecords: []
+    };
+
+    // --- ÉTAT UI ---
+    var uiState = {
+        selectedBar: null,
+        currentTableId: null,
+        isDemoMode: false,
+        colTypes: {
+            notion: null,
+            sequence: null,
+            etat: null
+        },
+        globalMappings: {
+            notion: "notion",
+            notionTxt: null,
+            sequence: "sequence",
+            sequenceTxt: null,
+            dateDebut: "dateDebut",
+            dateFin: "dateFin",
+            etat: "etat",
+            etatTxt: null,
+            groupe: "groupe"
+        }
+    };
+
+    // --- ÉTAT DRAG & DROP ---
+    var dragState = {
+        active: false,
+        bar: null,
+        item: null,
+        type: "move",
+        startX: 0,
+        originalLeft: 0,
+        originalWidth: 0
+    };
+
+    // --- UTILITAIRES DE DATES SCOLAIRES ---
+    function parseDate(val) {
+        if (!val) return null;
+        if (typeof val === "number") return new Date(val * 1000);
+        var d = new Date(val);
+        if (!isNaN(d.getTime())) return d;
+        return null;
+    }
+
+    function formatDate(date) {
+        if (!date) return "";
+        var d = ("0" + date.getDate()).slice(-2);
+        var m = ("0" + (date.getMonth() + 1)).slice(-2);
+        var y = date.getFullYear();
+        return d + "/" + m + "/" + y;
+    }
+
+    function isSummer(d) {
+        if (!d) return false;
+        return SUMMER_MONTHS.includes(d.getMonth());
+    }
+
+    function getSchoolDaysBetween(start, end) {
+        if (!start || !end) return 0;
+        var s = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+        var e = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+        var sign = 1;
+        if (s > e) { var t = s; s = e; e = t; sign = -1; }
+        
+        var days = 0;
+        var cur = new Date(s);
+        while (cur < e) {
+            if (!isSummer(cur)) days++;
+            cur.setDate(cur.getDate() + 1);
+        }
+        return days * sign;
+    }
+
+    function addSchoolDays(date, days) {
+        var d = new Date(date);
+        var added = 0;
+        var step = days > 0 ? 1 : -1;
+        var target = Math.abs(days);
+        
+        while (added < target) {
+            d.setDate(d.getDate() + step);
+            if (!isSummer(d)) added++;
+        }
+        return d;
+    }
+
+    function getNearestMonday(date) {
+        var d = new Date(date);
+        var day = d.getDay();
+        var diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        if (isSummer(d)) {
+            d = new Date(d.getFullYear() + (d.getMonth() === 7 ? 0 : 1), 8, 1);
+        }
+        return d;
+    }
+
+    function getFirstDayOfMonth(date) {
+        var d = new Date(date);
+        d.setDate(1);
+        if (isSummer(d)) {
+            d = new Date(d.getFullYear() + (d.getMonth() >= 6 ? 1 : 0), 8, 1);
+        }
+        return d;
+    }
+
+    // --- DECODAGE DES VALEURS GRIST ---
+    function unwrapGristValue(val) {
+        if (Array.isArray(val)) {
+            if (val[0] === 'L') return val.length > 1 ? val[1] : null; // On extrait le 1er ID de la liste
+            return val.length > 0 ? val[0] : null;
+        }
+        // Gestion des valeurs stringifiées accidentellement "L,id"
+        if (typeof val === 'string') {
+            if (val.startsWith('L,')) {
+                var parts = val.split(',');
+                var parsed = parseInt(parts[1], 10);
+                return isNaN(parsed) ? null : parsed;
+            }
+            try {
+                var parsedArray = JSON.parse(val);
+                if (Array.isArray(parsedArray)) {
+                    if (parsedArray[0] === 'L') return parsedArray.length > 1 ? parsedArray[1] : null;
+                    return parsedArray.length > 0 ? parsedArray[0] : null;
+                }
+            } catch(e) {}
+        }
+        return val;
+    }
+
+    function getDisplayValue(rawId, list) {
+        if (typeof rawId === "number" && list && list.length > 0) {
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].id === rawId) return list[i].name;
+            }
+        }
+        return null;
+    }
+
+    // --- MAPPINGS & REFS ---
+    function detectEtat(etat) {
+        if (!etat) return "Découverte";
+        var e = String(etat).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        if (e.indexOf("dec") > -1 || e === "d") return "Découverte";
+        if (e.indexOf("app") > -1 || e === "a") return "Approfondissement";
+        if (e.indexOf("rev") > -1 || e.indexOf("rév") > -1 || e === "r") return "Révision";
+        if (e.indexOf("eval") > -1 || e.indexOf("éval") > -1 || e === "e") return "Évaluation";
+        return "Découverte";
+    }
+
+    function mapColumnNames(record) {
+        var colNotion = uiState.globalMappings.notion || "notion";
+        var colNotionTxt = uiState.globalMappings.notionTxt;
+        var colSequence = uiState.globalMappings.sequence || "sequence";
+        var colSequenceTxt = uiState.globalMappings.sequenceTxt;
+        var colEtat = uiState.globalMappings.etat || "etat";
+        var colEtatTxt = uiState.globalMappings.etatTxt;
+        var colGroupe = uiState.globalMappings.groupe || "groupe";
+
+        // NOTIONS
+        var isNotionList = Array.isArray(record[colNotion]) && record[colNotion][0] === 'L';
+        var notionRaw = unwrapGristValue(record[colNotion]);
+        if (notionRaw === 0) notionRaw = null;
+        var notionTxtRaw = unwrapGristValue(record[colNotionTxt]);
+        var notionDisplay = (colNotionTxt && notionTxtRaw) ? notionTxtRaw : notionRaw;
+        if (typeof notionDisplay === "number") {
+            var foundNotion = getDisplayValue(notionDisplay, dataStore.notionsList);
+            if (foundNotion) notionDisplay = foundNotion;
+        }
+        
+        // SEQUENCES
+        var isSequenceList = Array.isArray(record[colSequence]) && record[colSequence][0] === 'L';
+        var sequenceRaw = unwrapGristValue(record[colSequence]);
+        if (sequenceRaw === 0) sequenceRaw = null;
+        var sequenceTxtRaw = unwrapGristValue(record[colSequenceTxt]);
+        var sequenceDisplay = (colSequenceTxt && sequenceTxtRaw) ? sequenceTxtRaw : sequenceRaw;
+        if (typeof sequenceDisplay === "number") {
+            var foundSeq = getDisplayValue(sequenceDisplay, dataStore.sequencesList);
+            if (foundSeq) sequenceDisplay = foundSeq;
+        }
+
+        // ETAT & GROUPE
+        var etatRaw = unwrapGristValue(record[colEtat]);
+        if (etatRaw === 0) etatRaw = null;
+        var etatTxtRaw = unwrapGristValue(record[colEtatTxt]);
+        var etatDisplay = (colEtatTxt && etatTxtRaw) ? etatTxtRaw : etatRaw;
+        
+        var groupeRaw = unwrapGristValue(record[colGroupe]);
+        if (groupeRaw === 0) groupeRaw = null;
+        var groupeDisplay = groupeRaw ? String(groupeRaw) : "Général";
+
+        return {
+            id: record.id,
+            rawNotion: notionRaw,
+            isNotionList: isNotionList,
+            rawSequence: sequenceRaw,
+            isSequenceList: isSequenceList,
+            rawEtat: etatRaw,
+            rawGroupe: groupeRaw,
+            notion: notionDisplay ? String(notionDisplay) : "Sans notion",
+            sequence: sequenceDisplay ? String(sequenceDisplay) : "Sans séquence",
+            groupe: groupeDisplay,
+            dateDebut: record[uiState.globalMappings.dateDebut || "dateDebut"],
+            dateFin: record[uiState.globalMappings.dateFin || "dateFin"],
+            etat: etatDisplay ? String(etatDisplay) : "Découverte"
+        };
+    }
+
+    async function getTargetTableForColumn(colName, typeKey) {
+        if (!uiState.currentTableId) return null;
+        try {
+            var tables = await grist.docApi.fetchTable('_grist_Tables');
+            var currentTableInternalId = null;
+            for (var i = 0; i < tables.tableId.length; i++) {
+                if (tables.tableId[i] === uiState.currentTableId) {
+                    currentTableInternalId = tables.id[i];
+                    break;
+                }
+            }
+            
+            if (currentTableInternalId) {
+                var cols = await grist.docApi.fetchTable('_grist_Tables_column');
+                for (var i = 0; i < cols.colId.length; i++) {
+                    if (cols.parentId[i] === currentTableInternalId && cols.colId[i] === colName) {
+                        var type = cols.type[i];
+                        if (typeKey && uiState.colTypes) {
+                            uiState.colTypes[typeKey] = type;
+                        }
+                        if (type && type.startsWith('Ref:')) return type.substring(4);
+                        if (type && type.startsWith('RefList:')) return type.substring(8);
+                        break;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("Erreur getTargetTableForColumn", e);
+        }
+        return null;
+    }
+
+    async function loadNotionsTable() {
+        if (uiState.isDemoMode) {
+            dataStore.notionsList = [{ id: 1, name: "Chapitre 1" }, { id: 2, name: "Chapitre 2" }];
+            return;
+        }
+
+        try {
+            var targetTableId = await getTargetTableForColumn(uiState.globalMappings.notion || "notion", 'notion');
+
+            if (!targetTableId) {
+                try {
+                    var allTables = await grist.docApi.fetchTable('_grist_Tables');
+                    var keywords = ['notion', 'matiere', 'mati_re', 'sujet', 'theme', 'th_me'];
+                    for (var i = 0; i < allTables.tableId.length; i++) {
+                        var tid = allTables.tableId[i].toLowerCase();
+                        if (tid.indexOf('_grist') > -1) continue;
+                        for (var j = 0; j < keywords.length; j++) {
+                            if (tid.indexOf(keywords[j]) > -1) { targetTableId = allTables.tableId[i]; break; }
+                        }
+                        if (targetTableId) break;
+                    }
+                } catch(e) {}
+            }
+
+            if (!targetTableId) {
+                var tableNames = ['Notions', 'Notion', 'Matières', 'Sujets', 'Thèmes'];
+                for (var i = 0; i < tableNames.length; i++) {
+                    try { var test = await grist.docApi.fetchTable(tableNames[i]); targetTableId = tableNames[i]; break; } catch(e) {}
+                }
+            }
+
+            if (targetTableId) {
+                var notionsTable = await grist.docApi.fetchTable(targetTableId);
+                var keys = Object.keys(notionsTable);
+                var textCol = keys.find(function(k) { return ['name', 'nom', 'notion', 'libellé', 'title', 'titre', 'sujet', 'chapitre', 'texte'].indexOf(k.toLowerCase()) > -1; });
+                if (!textCol) {
+                    textCol = keys.find(function(k) { return k !== 'id' && k !== 'manualSort' && k.indexOf('_grist') === -1; });
+                }
+                
+                // Détection de la colonne domaine (priorité à domaineTxt si mappée)
+                var domainCol = null;
+                var domainTxtCol = null;
+
+                // Cherche d'abord domaineTxt (si mappée)
+                if (uiState.globalMappings.domaineTxt) {
+                    domainTxtCol = await getTargetTableForColumn(uiState.globalMappings.domaineTxt, 'domaineTxt');
+                    if (domainTxtCol) {
+                        domainCol = domainTxtCol;
+                    }
+                }
+
+                // Sinon, détection intelligente de la colonne domaine
+                if (!domainCol) {
+                    var keywords = ['domaine', 'domain', 'categorie', 'catégorie', 'theme', 'thème', 'groupe'];
+                    var possibleDomainCols = keys.filter(function(k) { 
+                        var kLower = k.toLowerCase();
+                        return keywords.some(function(kw) { return kLower.indexOf(kw) > -1; }) && k.indexOf('_grist') === -1; 
+                    });
+
+                    domainCol = possibleDomainCols.find(function(k) {
+                        for (var i = 0; i < Math.min(5, notionsTable[k].length); i++) {
+                            if (typeof notionsTable[k][i] === 'string' && isNaN(notionsTable[k][i])) return true;
+                        }
+                        return false;
+                    });
+
+                    if (!domainCol && possibleDomainCols.length > 0) {
+                        domainCol = possibleDomainCols[0];
+                    }
+                }
+                
+                // Mémorisation pour l'ajout ultérieur
+                dataStore.notionRefTableId = targetTableId;
+                dataStore.notionTextCol = textCol;
+
+                dataStore.notionsList = Object.keys(notionsTable.id).map(function(idx) {
+                    var name = textCol && notionsTable[textCol] ? notionsTable[textCol][idx] : String(notionsTable.id[idx]);
+                    if (Array.isArray(name) && name[0] === 'L') name = name.length > 1 ? name[1] : name[0];
+                    
+                    // Extraction du domaine (priorité à domaineTxt si disponible)
+                    var domaine = "Sans domaine";
+                    if (domainTxtCol && notionsTable[domainTxtCol]) {
+                        domaine = notionsTable[domainTxtCol][idx] || "Sans domaine";
+                    } else if (domainCol && notionsTable[domainCol]) {
+                        domaine = notionsTable[domainCol][idx] || "Sans domaine";
+                    }
+                    if (Array.isArray(domaine) && domaine[0] === 'L') domaine = domaine.length > 1 ? domaine[1] : domaine[0];
+
+                    return { id: notionsTable.id[idx], name: String(name), domaine: String(domaine) };
+                });
+            } else {
+                dataStore.notionsList = [];
+            }
+        } catch(err) {
+            console.error("Erreur chargement des notions:", err);
+            dataStore.notionsList = [];
+        }
+    }
+
+    async function loadSequencesTable() {
+        if (uiState.isDemoMode) {
+            dataStore.sequencesList = [{ id: 1, name: "Séquence 1" }, { id: 2, name: "Séquence 2" }];
+            return;
+        }
+
+        try {
+            var targetTableId = await getTargetTableForColumn(uiState.globalMappings.sequence || "sequence", 'sequence');
+
+            if (!targetTableId) {
+                try {
+                    var allTables = await grist.docApi.fetchTable('_grist_Tables');
+                    var keywords = ['sequence', 's_quence', 'seq'];
+                    for (var i = 0; i < allTables.tableId.length; i++) {
+                        var tid = allTables.tableId[i].toLowerCase();
+                        if (tid.indexOf('_grist') > -1) continue;
+                        for (var j = 0; j < keywords.length; j++) {
+                            if (tid.indexOf(keywords[j]) > -1) { targetTableId = allTables.tableId[i]; break; }
+                        }
+                        if (targetTableId) break;
+                    }
+                } catch(e) {}
+            }
+
+            if (!targetTableId) {
+                var tableNames = ['Sequences', 'Séquences', 'Sequence', 'Séquence'];
+                for (var i = 0; i < tableNames.length; i++) {
+                    try { var test = await grist.docApi.fetchTable(tableNames[i]); targetTableId = tableNames[i]; break; } catch(e) {}
+                }
+            }
+
+            if (targetTableId) {
+                var seqTable = await grist.docApi.fetchTable(targetTableId);
+                var keys = Object.keys(seqTable);
+                var textCol = keys.find(function(k) { return ['name', 'nom', 'sequence', 'séquence', 'titre', 'title', 'texte', 'libellé'].indexOf(k.toLowerCase()) > -1; });
+                if (!textCol) {
+                    textCol = keys.find(function(k) { return k !== 'id' && k !== 'manualSort' && k.indexOf('_grist') === -1; });
+                }
+
+                // Mémorisation pour l'ajout ultérieur
+                dataStore.sequenceRefTableId = targetTableId;
+                dataStore.sequenceTextCol = textCol;
+
+                dataStore.sequencesList = Object.keys(seqTable.id).map(function(idx) {
+                    var name = textCol && seqTable[textCol] ? seqTable[textCol][idx] : String(seqTable.id[idx]);
+                    if (Array.isArray(name) && name[0] === 'L') name = name.length > 1 ? name[1] : name[0];
+                    return { id: seqTable.id[idx], name: String(name) };
+                });
+            } else {
+                dataStore.sequencesList = [];
+            }
+        } catch(err) {
+            console.error("Erreur chargement des séquences:", err);
+            dataStore.sequencesList = [];
+        }
+    }
+
+    function buildRefMaps(records) {
+        dataStore.stateRefMap = {};
+        dataStore.notionRefMap = {};
+        dataStore.sequenceRefMap = {};
+        for (var i = 0; i < records.length; i++) {
+            var r = mapColumnNames(records[i]);
+            if (typeof r.rawEtat === "number") {
+                var normalized = detectEtat(r.etat);
+                dataStore.stateRefMap[normalized] = r.rawEtat;
+            }
+            if (typeof r.rawNotion === "number") dataStore.notionRefMap[r.notion] = r.rawNotion;
+            if (typeof r.rawSequence === "number") dataStore.sequenceRefMap[r.sequence] = r.rawSequence;
+        }
+    }
+
+    function groupByItem(records) {
+        var grouped = {};
+        for (var i = 0; i < records.length; i++) {
+            var item = mapColumnNames(records[i]);
+            var groupe = item.groupe || "Général";
+            
+            var mainKey;
+            if (state.viewMode === "sequences") {
+                mainKey = item.sequence || "Sans séquence";
+            } else {
+                mainKey = item.notion || "Sans notion";
+            }
+            
+            item._index = i;
+            item._id = records[i].id;
+            
+            if (!grouped[groupe]) grouped[groupe] = {};
+            if (!grouped[groupe][mainKey]) grouped[groupe][mainKey] = [];
+            grouped[groupe][mainKey].push(item);
+        }
+        return grouped;
+    }
+
+    // --- INITIALISATION DES BORNES ---
+    function computeBounds() {
+        var dates = [];
+        dataStore.allRecords.forEach(function(r) {
+            var item = mapColumnNames(r);
+            var d = parseDate(item.dateDebut);
+            var f = parseDate(item.dateFin);
+            if (d) dates.push(d);
+            if (f) dates.push(f);
+        });
+
+        if (dates.length > 0) {
+            var minD = new Date(Math.min.apply(null, dates.map(function(d) { return d.getTime(); })));
+            var maxD = new Date(Math.max.apply(null, dates.map(function(d) { return d.getTime(); })));
+        } else {
+            var today = new Date();
+            minD = new Date(today);
+            maxD = new Date(today);
+            minD.setDate(minD.getDate() - 7);
+            maxD.setDate(maxD.getDate() + 30);
+        }
+
+        state.baseYear = minD.getMonth() < 8 ? minD.getFullYear() - 1 : minD.getFullYear();
+        state.minDate = new Date(state.baseYear, 8, 1);
+        state.maxDate = new Date(state.baseYear + parseInt(state.yearsScope), 5, 30);
+        state.totalSchoolDays = getSchoolDaysBetween(state.minDate, state.maxDate) + 1;
+    }
+
+    // --- RENDU DOM ---
+    function renderGantt() {
+        computeBounds();
+        buildRefMaps(dataStore.allRecords);
+        dataStore.groupedTasks = groupByItem(dataStore.allRecords);
+
+        var pxPerDay = pxSettings[state.zoomLevel];
+        var totalWidthPx = state.totalSchoolDays * pxPerDay;
+        
+        var scrollArea = document.getElementById("gantt-scroll-area");
+        var holidaysLayer = document.getElementById("gantt-holidays-layer");
+        var table = document.getElementById("gantt-table");
+        
+        holidaysLayer.style.left = state.showColumns ? "160px" : "0px";
+        holidaysLayer.style.width = totalWidthPx + "px";
+        table.style.width = (totalWidthPx + (state.showColumns ? 160 : 0)) + "px";
+
+        renderHeader(table, totalWidthPx);
+        renderBody(table, totalWidthPx);
+        renderHolidays(holidaysLayer, totalWidthPx);
+        renderFooter(table);
+    }
+
+    function renderHeader(table, totalWidthPx) {
+        var oldHead = table.querySelector("thead");
+        if (oldHead) oldHead.remove();
+        
+        var thead = document.createElement("thead");
+        var tr = document.createElement("tr");
+
+        if (state.showColumns) {
+            var th = document.createElement("td");
+            th.className = "col-notion";
+            th.textContent = state.viewMode === "sequences" ? "Séquence" : "Notion";
+            th.style.background = "#bdc3c7";
+            tr.appendChild(th);
+        }
+
+        var tdDates = document.createElement("td");
+        tdDates.className = "header-dates";
+        tdDates.style.width = totalWidthPx + "px";
+        tdDates.style.minWidth = totalWidthPx + "px";
+
+        var cur = new Date(state.minDate);
+        var lastPct = 0;
+        
+        while (cur <= state.maxDate) {
+            if (isSummer(cur)) {
+                cur = new Date(cur.getFullYear(), 8, 1);
+                if (cur > state.maxDate) break;
+            }
+            
+            var next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+            var end = next < state.maxDate ? next : new Date(state.maxDate.getTime() + 86400000);
+            
+            var pct = (getSchoolDaysBetween(state.minDate, end) / state.totalSchoolDays) * 100;
+            var div = document.createElement("div");
+            div.className = "month-label" + (cur.getMonth() === 8 && cur.getFullYear() !== state.baseYear ? " year-separator" : "");
+            div.style.left = lastPct + "%";
+            div.style.width = (pct - lastPct) + "%";
+            
+            var mNames = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"];
+            div.textContent = mNames[cur.getMonth()] + " " + cur.getFullYear();
+            tdDates.appendChild(div);
+            
+            lastPct = pct;
+            cur = next;
+        }
+
+        tr.appendChild(tdDates);
+        thead.appendChild(tr);
+        table.appendChild(thead);
+    }
+
+    var groupCollapseState = {};
+
+    function toggleGroup(groupe) {
+        groupCollapseState[groupe] = !groupCollapseState[groupe];
+        renderGantt();
+    }
+
+    function isGroupExpanded(groupe) {
+        return groupCollapseState[groupe] !== false;
+    }
+
+    function renderBody(table, totalWidthPx) {
+        var oldBody = table.querySelector("tbody");
+        if (oldBody) oldBody.remove();
+        var tbody = document.createElement("tbody");
+
+        var groupeKeys = Object.keys(dataStore.groupedTasks).sort();
+        
+        groupeKeys.forEach(function(groupe) {
+            var itemKeys = Object.keys(dataStore.groupedTasks[groupe]).sort();
+            
+            var groupTr = document.createElement("tr");
+            groupTr.className = "group-header-row";
+            groupTr.setAttribute("data-groupe", groupe);
+
+            if (state.showColumns) {
+                var groupTd = document.createElement("td");
+                groupTd.className = "col-notion group-header-cell";
+                groupTd.colSpan = "1";
+                
+                var toggleSpan = document.createElement("span");
+                toggleSpan.className = "group-toggle";
+                toggleSpan.textContent = isGroupExpanded(groupe) ? "▼" : "▶";
+                toggleSpan.onclick = function(e) {
+                    e.stopPropagation();
+                    toggleGroup(groupe);
+                };
+                
+                groupTd.appendChild(toggleSpan);
+                groupTd.appendChild(document.createTextNode(groupe));
+                groupTr.appendChild(groupTd);
+            }
+
+            var groupCellTd = document.createElement("td");
+            groupCellTd.className = "gantt-cell";
+            groupCellTd.style.width = totalWidthPx + "px";
+            groupTr.appendChild(groupCellTd);
+            
+            tbody.appendChild(groupTr);
+
+            if (isGroupExpanded(groupe)) {
+                itemKeys.forEach(function(mainKey) {
+                    var tr = document.createElement("tr");
+                    tr.className = "gantt-row group-content-row" + (state.showColumns ? "" : " full-width");
+                    tr.setAttribute("data-groupe", groupe);
+
+                    if (state.showColumns) {
+                        var tdNotion = document.createElement("td");
+                        tdNotion.className = "col-notion group-indent";
+                        tdNotion.textContent = mainKey;
+                        tdNotion.title = mainKey;
+                        tr.appendChild(tdNotion);
+                    }
+
+                    var tdCell = document.createElement("td");
+                    tdCell.className = "gantt-cell";
+                    tdCell.style.width = totalWidthPx + "px";
+
+                    var firstItem = dataStore.groupedTasks[groupe][mainKey][0];
+                    var currentRawItem = firstItem ? (state.viewMode === "sequences" ? firstItem.rawSequence : firstItem.rawNotion) : null;
+                    var sourceRowId = firstItem ? firstItem._id : null; 
+
+                    tdCell.addEventListener("dblclick", function(e) {
+                        if (e.target === tdCell) {
+                            e.stopPropagation();
+                            var pxPerDay = pxSettings[state.zoomLevel];
+                            var deltaDays = Math.floor(e.offsetX / pxPerDay);
+                            var dateDebut = addSchoolDays(state.minDate, deltaDays);
+                            
+                            if (isSummer(dateDebut)) {
+                                showToast("Création refusée : La date tombe en été.", "error");
+                                return;
+                            }
+                            var dateFin = addSchoolDays(dateDebut, 5);
+
+                            var newItem = {
+                                isCreation: true,
+                                _id: null,
+                                groupe: groupe,
+                                sourceRowId: sourceRowId,
+                                dateDebut: dateDebut.toISOString().split('T')[0],
+                                dateFin: dateFin.toISOString().split('T')[0],
+                                etat: "Découverte"
+                            };
+
+                            if (state.viewMode === "sequences") {
+                                newItem.sequence = mainKey;
+                                newItem.rawSequence = currentRawItem;
+                            } else {
+                                newItem.notion = mainKey;
+                                newItem.rawNotion = currentRawItem;
+                            }
+
+                            openModal(newItem).catch(function(err) { console.error(err); });
+                        }
+                    });
+
+                    dataStore.groupedTasks[groupe][mainKey].forEach(function(item) {
+                        var dStart = parseDate(item.dateDebut);
+                        var dEnd = parseDate(item.dateFin);
+                        if (!dStart || !dEnd) return;
+                        
+                        if (isSummer(dStart) && isSummer(dEnd)) return;
+                        
+                        var clampStart = dStart < state.minDate ? state.minDate : dStart;
+                        var clampEnd = dEnd > state.maxDate ? state.maxDate : dEnd;
+
+                        var leftPct = (getSchoolDaysBetween(state.minDate, clampStart) / state.totalSchoolDays) * 100;
+                        var widthPct = (getSchoolDaysBetween(clampStart, clampEnd) / state.totalSchoolDays) * 100;
+
+                        var etatClass = (state.viewMode === "sequences") ? "bar-sequence" : "bar-" + detectEtat(item.etat).toLowerCase().replace(/é/g, "e").replace(/\s/g, "-");
+                        
+                        var bar = document.createElement("div");
+                        bar.className = "gantt-bar " + etatClass;
+                        bar.style.left = leftPct + "%";
+                        bar.style.width = Math.max(0.5, widthPct) + "%";
+                        bar.setAttribute("data-id", item._id);
+                        bar.setAttribute("data-index", item._index);
+
+                        var title = document.createElement("span");
+                        title.className = "bar-title";
+                        title.textContent = state.viewMode === "sequences" ? item.sequence : item.notion;
+                        
+                        var hl = document.createElement("div"); hl.className = "resize-handle resize-left";
+                        var hr = document.createElement("div"); hr.className = "resize-handle resize-right";
+                        
+                        bar.appendChild(title);
+                        bar.appendChild(hl);
+                        bar.appendChild(hr);
+
+                        bar.addEventListener("dblclick", function(e) { 
+                            e.stopPropagation(); 
+                            openModal(item).catch(function(err) { console.error("Erreur openModal:", err); }); 
+                        });
+                        
+                        bar.addEventListener("mousedown", function(e) {
+                            if (e.target.classList.contains("resize-handle")) return;
+                            startDrag(e, bar, item, "move");
+                        });
+                        
+                        hl.addEventListener("mousedown", function(e) { 
+                            e.stopPropagation(); 
+                            startDrag(e, bar, item, "resize-left"); 
+                        });
+                        hr.addEventListener("mousedown", function(e) { 
+                            e.stopPropagation(); 
+                            startDrag(e, bar, item, "resize-right"); 
+                        });
+                        
+                        var etatText = state.viewMode === "sequences" ? "Séquence" : detectEtat(item.etat);
+                        bar.addEventListener("mouseenter", function(hoverItem, hoverEtat, hoverDebut, hoverFin) {
+                            return function(e) {
+                                var dur = getSchoolDaysBetween(hoverDebut, hoverFin);
+                                showTooltip(e, hoverItem, hoverEtat, formatDate(hoverDebut), formatDate(hoverFin), dur);
+                            };
+                        }(item, etatText, dStart, dEnd));
+                        
+                        bar.addEventListener("mousemove", moveTooltip);
+                        bar.addEventListener("mouseleave", hideTooltip);
+                        
+                        bar.addEventListener("click", function(clickItem) {
+                            return function(e) { 
+                                e.stopPropagation(); 
+                                selectBar(clickItem); 
+                            };
+                        }(item));
+
+                        tdCell.appendChild(bar);
+                    });
+
+                    tr.appendChild(tdCell);
+                    tbody.appendChild(tr);
+                });
+            }
+        });
+        table.appendChild(tbody);
+    }
+
+    function renderHolidays(layer, totalWidthPx) {
+        layer.innerHTML = "";
+        dataStore.holidays.forEach(function(h) {
+            var dStart = parseDate(h.Date_Debut);
+            var dEnd = parseDate(h.Date_Fin);
+            if (!dStart || !dEnd || dEnd < state.minDate || dStart > state.maxDate) return;
+
+            var clampStart = dStart < state.minDate ? state.minDate : dStart;
+            var clampEnd = dEnd > state.maxDate ? state.maxDate : dEnd;
+
+            var leftPct = (getSchoolDaysBetween(state.minDate, clampStart) / state.totalSchoolDays) * 100;
+            var widthPct = (getSchoolDaysBetween(clampStart, clampEnd) / state.totalSchoolDays) * 100;
+
+            var div = document.createElement("div");
+            div.className = "holiday-block";
+            div.style.left = leftPct + "%";
+            div.style.width = widthPct + "%";
+            div.title = h.Nom;
+            layer.appendChild(div);
+        });
+    }
+
+    function renderFooter(table) {
+        var oldFooter = table.querySelector("tfoot");
+        if (oldFooter) oldFooter.remove();
+        
+        var tfoot = document.createElement("tfoot");
+        var footerRow = document.createElement("tr");
+
+        if (state.showColumns) {
+            var info = document.createElement("td");
+            info.className = "footer-info";
+            info.id = "selection-counter";
+            info.textContent = "";
+            footerRow.appendChild(info);
+        }
+
+        var cell = document.createElement("td");
+        cell.className = "footer-dates";
+        cell.innerHTML = 
+            (state.viewMode === "notions" ?
+                '<span class="legend-item decouverte"><span class="legend-dot"></span>Découverte</span>' +
+                '<span class="legend-item approfondissement"><span class="legend-dot"></span>Approfondissement</span>' +
+                '<span class="legend-item revision"><span class="legend-dot"></span>Révision</span>' +
+                '<span class="legend-item evaluation"><span class="legend-dot"></span>Évaluation</span>'
+            : 
+                '<span class="legend-item sequence"><span class="legend-dot"></span>Séquence</span>'
+            ) +
+            '<span class="version-badge">v' + VERSION + ' — Double-clic zone vide pour ajouter · Double-clic barre pour éditer</span>';
+        footerRow.appendChild(cell);
+        tfoot.appendChild(footerRow);
+        table.appendChild(tfoot);
+    }
+
+    // --- TOOLTIP ---
+    var tooltip = null;
+
+    function showTooltip(e, item, etat, debutFmt, finFmt, dur) {
+        if (!tooltip) {
+            tooltip = document.createElement("div");
+            tooltip.id = "gantt-tooltip";
+            document.body.appendChild(tooltip);
+        }
+        var titleText = state.viewMode === "sequences" ? item.sequence : item.notion;
+        tooltip.innerHTML = "<strong>" + (titleText || "") + "</strong><br>" +
+                           (state.viewMode === "notions" ? "État : " + etat + "<br>" : "") +
+                           "Début : " + debutFmt + "<br>" +
+                           "Fin   : " + finFmt + "<br>" +
+                           "Durée : " + dur + "j";
+        tooltip.style.display = "block";
+        moveTooltip(e);
+    }
+
+    function moveTooltip(e) {
+        if (!tooltip) return;
+        var x = e.clientX + 15, y = e.clientY - 10;
+        var w = window.innerWidth, h = window.innerHeight;
+        var tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+        tooltip.style.left = (x + tw > w ? e.clientX - tw - 15 : x) + "px";
+        tooltip.style.top  = (y + th > h ? e.clientY - th - 10 : y) + "px";
+    }
+
+    function hideTooltip() {
+        if (tooltip) tooltip.style.display = "none";
+    }
+
+    // --- SÉLECTION ---
+    function selectBar(item) {
+        if (uiState.selectedBar) uiState.selectedBar.classList.remove("selected");
+        var bars = document.querySelectorAll(".gantt-bar");
+        for (var i = 0; i < bars.length; i++) {
+            if (bars[i].getAttribute("data-id") == item._id) {
+                uiState.selectedBar = bars[i];
+                uiState.selectedBar.classList.add("selected");
+                break;
+            }
+        }
+        if (!uiState.isDemoMode && typeof grist !== "undefined" && grist) {
+            grist.setCursorPos({rowId: item._id}).catch(function() {});
+        }
+        updateSelectionCounter();
+    }
+
+    function updateBarSelection(rowId) {
+        var bars = document.querySelectorAll(".gantt-bar");
+        for (var i = 0; i < bars.length; i++) {
+            if (bars[i].getAttribute("data-id") == rowId) {
+                if (uiState.selectedBar) uiState.selectedBar.classList.remove("selected");
+                uiState.selectedBar = bars[i];
+                uiState.selectedBar.classList.add("selected");
+                break;
+            }
+        }
+        updateSelectionCounter();
+    }
+
+    function updateSelectionCounter() {
+        var counter = document.getElementById("selection-counter");
+        if (counter) {
+            if (uiState.selectedBar) {
+                counter.textContent = "Sélection active";
+            } else {
+                counter.textContent = "";
+            }
+        }
+    }
+
+    // --- DRAG & DROP ---
+    function startDrag(e, bar, item, type) {
+        e.preventDefault();
+        dragState.active = true;
+        dragState.bar = bar;
+        dragState.item = item;
+        dragState.type = type;
+        dragState.startX = e.clientX;
+        dragState.originalLeft = bar.offsetLeft;
+        dragState.originalWidth = bar.offsetWidth;
+        bar.style.opacity = "0.7";
+        bar.style.cursor = "grabbing";
+        bar.style.zIndex = "100";
+    }
+
+    function onMouseMove(e) {
+        if (!dragState.active || !dragState.bar) return;
+
+        var dx = e.clientX - dragState.startX;
+        var barWidth = dragState.originalWidth;
+
+        if (dragState.type === "move") {
+            dragState.bar.style.transform = "translateX(" + dx + "px)";
+            dragState.bar.style.left = dragState.originalLeft + "px";
+        } else if (dragState.type === "resize-right") {
+            var newWidth = Math.max(10, barWidth + dx);
+            dragState.bar.style.width = newWidth + "px";
+        } else if (dragState.type === "resize-left") {
+            var parentWidth = dragState.bar.parentElement.offsetWidth;
+            var maxLeft = dragState.originalLeft + barWidth - 10;
+            var newLeft = Math.min(e.clientX - dragState.bar.parentElement.getBoundingClientRect().left, maxLeft);
+            var newWidth = dragState.originalLeft + barWidth - newLeft;
+            dragState.bar.style.left = (newLeft / parentWidth * 100) + "%";
+            dragState.bar.style.width = (newWidth / parentWidth * 100) + "%";
+        }
+    }
+
+    async function onMouseUp(e) {
+        if (!dragState.active) return;
+
+        var bar = dragState.bar;
+        var item = dragState.item;
+        var type = dragState.type;
+        var dx = e.clientX - dragState.startX;
+
+        bar.style.opacity = "1";
+        bar.style.cursor = "grab";
+        bar.style.zIndex = "";
+
+        if (type === "move") {
+            bar.style.transform = "";
+        }
+
+        var pxPerDay = pxSettings[state.zoomLevel];
+        var deltaDays = Math.round(dx / pxPerDay);
+
+        if (Math.abs(deltaDays) >= 0.5) {
+            var debut = parseDate(item.dateDebut);
+            var fin = parseDate(item.dateFin);
+
+            if (type === "move") {
+                debut = addSchoolDays(debut, deltaDays);
+                if (state.magnetism && !e.shiftKey && state.zoomLevel !== 'day') {
+                    if (state.zoomLevel === 'month') {
+                        debut = getFirstDayOfMonth(debut);
+                    } else {
+                        debut = getNearestMonday(debut);
+                    }
+                }
+                fin = addSchoolDays(debut, getSchoolDaysBetween(parseDate(item.dateDebut), parseDate(item.dateFin)));
+            } else if (type === "resize-right") {
+                fin = addSchoolDays(fin, deltaDays);
+            } else if (type === "resize-left") {
+                debut = addSchoolDays(debut, deltaDays);
+                if (debut > fin) debut = new Date(fin);
+            }
+
+            if (isSummer(debut) || isSummer(fin)) {
+                showToast("Déplacement refusé : Les dates tombent en été.", "error");
+                renderGantt();
+                return;
+            }
+
+            var yyyy = debut.getFullYear();
+            var mm = ("0" + (debut.getMonth() + 1)).slice(-2);
+            var dd = ("0" + debut.getDate()).slice(-2);
+            var newStart = yyyy + "-" + mm + "-" + dd;
+
+            yyyy = fin.getFullYear();
+            mm = ("0" + (fin.getMonth() + 1)).slice(-2);
+            dd = ("0" + fin.getDate()).slice(-2);
+            var newEnd = yyyy + "-" + mm + "-" + dd;
+
+            try {
+                var data = {
+                    dateDebut: newStart,
+                    dateFin: newEnd
+                };
+
+                if (uiState.currentTableId && !uiState.isDemoMode) {
+                    await writeToGrist(item._id, data);
+                    showToast("Déplacement enregistré !", "success");
+                } else if (uiState.isDemoMode) {
+                    item.dateDebut = newStart;
+                    item.dateFin = newEnd;
+                    showToast("Déplacement enregistré (mode démo)", "success");
+                }
+
+                if (uiState.isDemoMode) renderGantt();
+            } catch(err) {
+                console.error("Erreur drag:", err);
+                showToast("Erreur lors de l'enregistrement.", "error");
+                if (uiState.isDemoMode) renderGantt();
+            }
+        }
+
+        dragState.active = false;
+        dragState.bar = null;
+        dragState.item = null;
+    }
+
+    // --- MODAL ---
+    async function openModal(item) {
+        var modal = document.getElementById("modal-overlay");
+        var title = document.getElementById("modal-title");
+        var warning = document.getElementById("modal-warning");
+        var searchLabel = document.getElementById("label-modal-notion-search");
+        var notionIn = document.getElementById("modal-notion");
+        var startIn = document.getElementById("modal-start");
+        var endIn = document.getElementById("modal-end");
+        var etatIn = document.getElementById("modal-etat");
+        var rowIdIn = document.getElementById("modal-row-id");
+        var searchIn = document.getElementById("modal-notion-search");
+        var etatGroup = document.getElementById("form-group-etat");
+		
+		var btnDelete = document.getElementById("modal-delete");
+        if (btnDelete) {
+            btnDelete.style.display = item.isCreation ? "none" : "block";
+        }
+
+        if (!modal || !title) return;
+
+        var isSeq = state.viewMode === "sequences";
+
+        title.textContent = item.isCreation 
+            ? ("➕ Nouvelle " + (isSeq ? "séquence" : "notion") + " (" + item.groupe + ")") 
+            : ("Éditer : " + (isSeq ? (item.sequence || "") : (item.notion || "")));
+        
+        searchLabel.textContent = isSeq ? "Rechercher une séquence" : "Rechercher une notion";
+
+        if (etatGroup) {
+            etatGroup.style.display = isSeq ? "none" : "block";
+        }
+
+        if (searchIn) {
+            searchIn.value = "";
+            searchIn.disabled = false;
+            searchIn.style.display = "block";
+        }
+        
+        notionIn.innerHTML = "";
+        
+        var itemsList = isSeq ? dataStore.sequencesList : dataStore.notionsList;
+        var refMap = isSeq ? dataStore.sequenceRefMap : dataStore.notionRefMap;
+        var colType = isSeq ? uiState.colTypes.sequence : uiState.colTypes.notion;
+        var isRefColumn = (colType && (colType.startsWith('Ref:') || colType.startsWith('RefList:'))) || Object.keys(refMap).length > 0 || (itemsList.length > 0 && typeof itemsList[0].id === "number");
+        
+        if (itemsList.length === 0 && !uiState.isDemoMode) {
+            if (isSeq) await loadSequencesTable();
+            else await loadNotionsTable();
+            itemsList = isSeq ? dataStore.sequencesList : dataStore.notionsList;
+        }
+        
+        var itemsToUse = [];
+        if (itemsList.length > 0) {
+            itemsToUse = itemsList;
+        } else {
+            var uniqueSet = {};
+            for (var g in dataStore.groupedTasks) {
+                for (var k in dataStore.groupedTasks[g]) {
+                    uniqueSet[k] = true;
+                }
+            }
+            var uniqueItems = Object.keys(uniqueSet).sort();
+            itemsToUse = uniqueItems.map(function(name) {
+                return { id: refMap[name] || name, name: name };
+            });
+        }
+        
+        // Regroupement par domaine
+        var groups = {};
+        for (var i = 0; i < itemsToUse.length; i++) {
+            var el = itemsToUse[i];
+            var domName = el.domaine || "Général";
+            if (!groups[domName]) groups[domName] = [];
+            groups[domName].push(el);
+        }
+
+        var sortedDomains = Object.keys(groups).sort();
+        for (var d = 0; d < sortedDomains.length; d++) {
+            var currentDomain = sortedDomains[d];
+            
+            // Titre du domaine en gras (inactif)
+            var domainHeader = document.createElement("option");
+            domainHeader.disabled = true;
+            domainHeader.style.fontWeight = "bold";
+            domainHeader.style.color = "#2c3e50";
+            domainHeader.textContent = currentDomain;
+            notionIn.appendChild(domainHeader);
+
+            for (var j = 0; j < groups[currentDomain].length; j++) {
+                var el = groups[currentDomain][j];
+                var opt = document.createElement("option");
+                var elText = el.name || String(el.id);
+                opt.value = isRefColumn ? el.id : elText;
+                // Indentation forcée de la notion
+                opt.textContent = "\u00A0\u00A0\u00A0\u00A0" + elText;
+                notionIn.appendChild(opt);
+            }
+        }
+        
+        if (isRefColumn) {
+            notionIn.value = isSeq ? (item.rawSequence || "") : (item.rawNotion || "");
+        } else {
+            notionIn.value = isSeq ? (item.sequence || "") : (item.notion || "");
+        }
+        
+        var currentTextValue = isSeq ? item.sequence : item.notion;
+        if (!notionIn.value && currentTextValue) {
+            for (var i = 0; i < itemsToUse.length; i++) {
+                if (itemsToUse[i].name === currentTextValue) {
+                    notionIn.value = isRefColumn ? itemsToUse[i].id : itemsToUse[i].name;
+                    break;
+                }
+            }
+        }
+        
+        var dStart = parseDate(item.dateDebut);
+        var dEnd = parseDate(item.dateFin);
+        startIn.value = dStart ? dStart.toISOString().split('T')[0] : "";
+        endIn.value = dEnd ? dEnd.toISOString().split('T')[0] : "";
+        
+        if (!isSeq) {
+            etatIn.value = detectEtat(item.etat).toLowerCase().replace(/é/g, "e").replace(/\s/g, "-");
+        }
+        rowIdIn.value = item._id || "";
+        
+        notionIn.disabled = false;
+
+        if (isRefColumn) {
+            warning.textContent = "⚠️ Colonne " + (isSeq ? "Séquence" : "Notion") + " (Ref) : la modification est limitée aux valeurs existantes pour préserver la structure Grist.";
+            warning.style.display = "block";
+        } else {
+            warning.style.display = "none";
+        }
+
+        modal._editItem = item;
+        modal.classList.remove("hidden");
+    }
+
+    function closeModal() {
+        var modal = document.getElementById("modal-overlay");
+        if (modal) {
+            modal.classList.add("hidden");
+            modal._editItem = null;
+        }
+    }
+
+	async function deleteItem() {
+        var modal = document.getElementById("modal-overlay");
+        if (!modal || !modal._editItem || !modal._editItem._id) return;
+
+        if (!confirm("Voulez-vous vraiment supprimer cet élément du planning ?")) return;
+
+        try {
+            if (uiState.currentTableId && !uiState.isDemoMode) {
+                // RemoveRecord supprime uniquement la ligne dans la table courante
+                await grist.docApi.applyUserActions([
+                    ["RemoveRecord", uiState.currentTableId, modal._editItem._id]
+                ]);
+                showToast("Élément supprimé !", "success");
+            } else if (uiState.isDemoMode) {
+                showToast("Supprimé (mode démo) !", "success");
+            }
+            
+            closeModal();
+            if (uiState.isDemoMode) renderGantt();
+
+        } catch(err) {
+            console.error("Erreur deleteItem:", err);
+            showToast("Erreur lors de la suppression.", "error");
+        }
+    }
+	
+    async function saveModal() {
+        var modal = document.getElementById("modal-overlay");
+        var notionIn = document.getElementById("modal-notion");
+        var startIn = document.getElementById("modal-start");
+        var endIn = document.getElementById("modal-end");
+        var etatIn = document.getElementById("modal-etat");
+        var rowIdIn = document.getElementById("modal-row-id");
+        var searchIn = document.getElementById("modal-notion-search");
+
+        if (!modal) return;
+
+        var startStr = startIn.value;
+        var endStr = endIn.value;
+
+        if (!startStr) { showToast("La date de début est requise.", "error"); return; }
+        if (!endStr) { showToast("La date de fin est requise.", "error"); return; }
+
+        var startD = parseDate(startStr);
+        var endD = parseDate(endStr);
+        if (!startD || !endD) { showToast("Dates invalides.", "error"); return; }
+        if (endD < startD) { showToast("La fin doit être après le début.", "error"); return; }
+        if (isSummer(startD) || isSummer(endD)) { showToast("Saisie refusée : Dates en été", "error"); return; }
+
+        var rowId = rowIdIn.value ? parseInt(rowIdIn.value, 10) : null;
+        var item = modal._editItem;
+
+        var data = {
+            dateDebut: startStr,
+            dateFin: endStr
+        };
+
+        var isSeq = state.viewMode === "sequences";
+        var targetCol = isSeq ? (uiState.globalMappings.sequence || "sequence") : (uiState.globalMappings.notion || "notion");
+
+        if (!notionIn.disabled) {
+            var itemValue = notionIn.value;
+            var typedValue = searchIn ? searchIn.value.trim() : "";
+            var isNewItem = false;
+            
+            if (typedValue !== "") {
+                var selectedText = notionIn.options[notionIn.selectedIndex] ? notionIn.options[notionIn.selectedIndex].text : "";
+                if (typedValue.toLowerCase() !== selectedText.toLowerCase()) {
+                    var itemsList = isSeq ? dataStore.sequencesList : dataStore.notionsList;
+                    // Vérifier si le texte correspond quand même à une donnée existante
+                    var exists = itemsList.find(function(el) { return el.name.toLowerCase() === typedValue.toLowerCase(); });
+                    if (exists) {
+                        itemValue = exists.id;
+                    } else {
+                        itemValue = typedValue;
+                        isNewItem = true; // Détection flagrante d'une nouveauté
+                    }
+                }
+            }
+
+            if (!itemValue) { showToast("Veuillez sélectionner ou saisir une " + (isSeq ? "séquence" : "notion") + ".", "error"); return; }
+            
+            var itemsListForCheck = isSeq ? dataStore.sequencesList : dataStore.notionsList;
+            var refMap = isSeq ? dataStore.sequenceRefMap : dataStore.notionRefMap;
+            var colType = isSeq ? uiState.colTypes.sequence : uiState.colTypes.notion;
+            var isRefColumn = (colType && (colType.startsWith('Ref:') || colType.startsWith('RefList:'))) || Object.keys(refMap).length > 0 || (itemsListForCheck.length > 0 && typeof itemsListForCheck[0].id === "number");
+            
+            if (isRefColumn) {
+                var numericValue = isNewItem ? NaN : parseInt(itemValue, 10);
+                var currentRaw = isSeq ? item.rawSequence : item.rawNotion;
+                
+                if (item.isCreation || numericValue !== currentRaw || isNewItem) {
+                    
+                    // --- CREATION DANS LA TABLE DE REFERENCE SI INCONNU ---
+                    if (isNewItem) {
+                        var refTableId = isSeq ? dataStore.sequenceRefTableId : dataStore.notionRefTableId;
+                        var refTextCol = isSeq ? dataStore.sequenceTextCol : dataStore.notionTextCol;
+                        
+                        if (refTableId && refTextCol) {
+                            try {
+                                var colValuesRef = {};
+                                colValuesRef[refTextCol] = itemValue;
+                                // Injection immédiate de la nouveauté dans Grist
+                                var actionRes = await grist.docApi.applyUserActions([
+                                    ["AddRecord", refTableId, null, colValuesRef]
+                                ]);
+                                
+                                // Analyse robuste de la réponse
+                                if (Array.isArray(actionRes) && actionRes.length > 0) {
+                                    numericValue = parseInt(actionRes[0], 10);
+                                } else if (typeof actionRes === "number") {
+                                    numericValue = parseInt(actionRes, 10);
+                                } else {
+                                    numericValue = NaN;
+                                }
+
+                                // FALLBACK : Si l'API Grist n'a pas renvoyé l'ID, on va le chercher nous-mêmes
+                                if (isNaN(numericValue)) {
+                                    var updatedTable = await grist.docApi.fetchTable(refTableId);
+                                    var ids = updatedTable.id;
+                                    var texts = updatedTable[refTextCol];
+                                    // On parcourt la table à l'envers pour trouver l'ID de la ligne la plus récente
+                                    for (var i = ids.length - 1; i >= 0; i--) {
+                                        if (texts[i] === itemValue) {
+                                            numericValue = ids[i];
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (isNaN(numericValue)) {
+                                    throw new Error("L'ID est introuvable même après lecture de la table.");
+                                }
+
+                                // Mise à jour du store local pour éviter de devoir tout recharger
+                                var localList = isSeq ? dataStore.sequencesList : dataStore.notionsList;
+                                localList.push({ id: numericValue, name: itemValue });
+
+                            } catch(err) {
+                                console.error("Erreur lors de la création de la référence Grist:", err);
+                                showToast("Erreur lors de l'ajout dans la table de référence.", "error");
+                                return; // Arrêt critique
+                            }
+                        } else {
+                            showToast("Configuration invalide : table de référence introuvable.", "error");
+                            return;
+                        }
+                    }
+                    
+                    var finalVal = isNaN(numericValue) ? itemValue : numericValue;
+                    
+                    var isList = false;
+                    if (colType && colType.startsWith('RefList:')) {
+                        isList = true;
+                    } else {
+                        isList = isSeq ? item.isSequenceList : item.isNotionList;
+                    }
+                    
+                    // Format RefList ["L", id] si applicable
+                    if (!isNaN(numericValue) && isList) {
+                        finalVal = ["L", numericValue];
+                    }
+                    data[targetCol] = finalVal;
+                }
+            } else {
+                var currentText = isSeq ? item.sequence : item.notion;
+                if (item.isCreation || itemValue !== currentText) {
+                    data[targetCol] = itemValue;
+                }
+            }
+        }
+
+        if (!isSeq) {
+            var etatMap = { "decouverte": "Découverte", "approfondissement": "Approfondissement", "revision": "Révision", "evaluation": "Évaluation" };
+            var etatFinal = etatMap[etatIn.value] || "Découverte";
+            
+            var currentNormalized = item.isCreation ? "" : detectEtat(item.etat);
+            if (item.isCreation || etatFinal !== currentNormalized) {
+                if (typeof item.rawEtat === "number" || Object.keys(dataStore.stateRefMap).length > 0) {
+                    var targetId = dataStore.stateRefMap[etatFinal];
+                    if (targetId !== undefined) {
+                        data[uiState.globalMappings.etat || "etat"] = targetId;
+                    } else {
+                        showToast("Erreur: L'ID de l'état '" + etatFinal + "' est introuvable.", "error");
+                        return;
+                    }
+                } else {
+                    data[uiState.globalMappings.etat || "etat"] = etatFinal;
+                }
+            }
+        }
+
+        try {
+            if (uiState.currentTableId && !uiState.isDemoMode) {
+                if (rowId) {
+                    await writeToGrist(rowId, data);
+                    showToast("Modification enregistrée !", "success");
+                } else {
+                    data.groupe = item.groupe;
+                    data.sourceRowId = item.sourceRowId;
+                    await addToGrist(data);
+                    showToast("Nouvel enregistrement créé !", "success");
+                }
+            } else if (uiState.isDemoMode) {
+                showToast("Enregistré (mode démo) !", "success");
+                renderGantt();
+            }
+
+            closeModal();
+            if (uiState.isDemoMode) renderGantt();
+
+        } catch(err) {
+            console.error("Erreur saveModal:", err);
+            showToast("Erreur : " + err.message, "error");
+        }
+    }
+	
+    async function writeToGrist(rowId, data) {
+        if (!uiState.currentTableId) throw new Error("TableId non disponible");
+
+        var colValues = {};
+        if ("dateDebut" in data && uiState.globalMappings.dateDebut) colValues[uiState.globalMappings.dateDebut] = [data.dateDebut];
+        if ("dateFin" in data && uiState.globalMappings.dateFin) colValues[uiState.globalMappings.dateFin] = [data.dateFin];
+        
+        var colNotion = uiState.globalMappings.notion || "notion";
+        var colSequence = uiState.globalMappings.sequence || "sequence";
+        var colEtat = uiState.globalMappings.etat || "etat";
+
+        if (colNotion in data) colValues[colNotion] = [data[colNotion]];
+        if (colSequence in data) colValues[colSequence] = [data[colSequence]];
+        if (colEtat in data) colValues[colEtat] = [data[colEtat]];
+
+        if (Object.keys(colValues).length === 0) return;
+
+        await grist.docApi.applyUserActions([
+            ["BulkUpdateRecord", uiState.currentTableId, [rowId], colValues]
+        ]);
+    }
+
+    async function addToGrist(data) {
+        if (!uiState.currentTableId) throw new Error("TableId non disponible");
+
+        var colValues = {};
+        colValues[uiState.globalMappings.dateDebut || "dateDebut"] = data.dateDebut;
+        colValues[uiState.globalMappings.dateFin || "dateFin"] = data.dateFin;
+        
+        var colNotion = uiState.globalMappings.notion || "notion";
+        var colSequence = uiState.globalMappings.sequence || "sequence";
+        var colEtat = uiState.globalMappings.etat || "etat";
+
+        if (state.viewMode === "sequences") {
+            colValues[colSequence] = data[colSequence] || null;
+            colValues[colNotion] = null;
+            colValues[colEtat] = null;
+        } else {
+            colValues[colNotion] = data[colNotion] || null;
+            colValues[colSequence] = null;
+            if (data[colEtat]) colValues[colEtat] = data[colEtat];
+        }
+        
+        var colGroupe = uiState.globalMappings.groupe || "groupe";
+
+        if (data.groupe && data.groupe !== "Général") {
+            var finalGroupeValue = data.groupe;
+            
+            if (data.sourceRowId) {
+                try {
+                    var rawData = await grist.docApi.fetchTable(uiState.currentTableId);
+                    var rowIndex = rawData.id.indexOf(data.sourceRowId);
+                    
+                    if (rowIndex > -1 && rawData[colGroupe] !== undefined) {
+                        finalGroupeValue = rawData[colGroupe][rowIndex]; 
+                    }
+                } catch (e) {
+                    console.warn("Impossible de cloner l'ID du groupe:", e);
+                }
+            }
+            
+            colValues[colGroupe] = finalGroupeValue;
+        } else {
+            colValues[colGroupe] = null;
+        }
+
+        await grist.docApi.applyUserActions([
+            ["AddRecord", uiState.currentTableId, null, colValues]
+        ]);
+    }
+
+    // --- TOASTS ---
+    function showToast(msg, type) {
+        var c = document.getElementById("toast-container");
+        var t = document.createElement("div");
+        t.className = "toast toast-" + type; 
+        t.textContent = msg;
+        c.appendChild(t);
+        t.offsetHeight; 
+        t.classList.add("toast-visible");
+        setTimeout(function() { 
+            t.classList.remove("toast-visible"); 
+            setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 400); 
+        }, 3000);
+    }
+
+    // --- UTILS ---
+    function toggleColumns() {
+        state.showColumns = !state.showColumns;
+        renderGantt();
+    }
+
+    function refreshData() {
+        if (!uiState.isDemoMode && typeof grist !== "undefined" && grist) {
+            showLoading();
+            grist.fetchTable(function(records) { 
+                dataStore.allRecords = records;
+                renderGantt();
+                hideLoading();
+            });
+        } else {
+            renderGantt();
+        }
+    }
+
+    function showLoading() {
+        var overlay = document.getElementById("loading-overlay");
+        if (overlay) overlay.classList.remove("hidden");
+    }
+
+    function hideLoading() {
+        var overlay = document.getElementById("loading-overlay");
+        if (overlay) overlay.classList.add("hidden");
+    }
+
+    // --- INIT ---
+    async function initData() {
+        if (uiState.isDemoMode) {
+            dataStore.allRecords = [
+                { id: 1, sequence: "Seq 1", notion: "Chapitre 1", groupe: "Mathématiques", dateDebut: "2026-09-02", dateFin: "2026-09-15", etat: "Découverte" },
+                { id: 2, sequence: "Seq 1", notion: "Chapitre 2", groupe: "Mathématiques", dateDebut: "2026-09-16", dateFin: "2026-09-30", etat: "Approfondissement" }
+            ];
+            dataStore.holidays = [];
+            await loadNotionsTable();
+            await loadSequencesTable();
+            renderGantt();
+            return;
+        }
+
+        try {
+            var options = await grist.getOptions();
+            if (options) {
+                if (options.yearsScope) { 
+                    state.yearsScope = options.yearsScope; 
+                    document.getElementById("select-years").value = state.yearsScope; 
+                }
+                if (options.zoomLevel) { 
+                    state.zoomLevel = options.zoomLevel; 
+                    document.getElementById("select-zoom").value = state.zoomLevel; 
+                }
+                if (options.magnetism !== undefined) { 
+                    state.magnetism = options.magnetism;
+                    var btn = document.getElementById("btn-magnet");
+                    btn.textContent = "🧲 Magnétisme : " + (state.magnetism ? "ON" : "OFF");
+                    btn.className = "header-btn " + (state.magnetism ? "active" : "");
+                    if (!uiState.isDemoMode) grist.setOption('magnetism', state.magnetism);
+                }
+            }
+        } catch(e) {}
+
+        try {
+            var holRecords = await grist.docApi.fetchTable('Vacances');
+            dataStore.holidays = Object.keys(holRecords.id).map(function(idx) {
+                return { Nom: holRecords.Nom[idx], Date_Debut: holRecords.Date_Debut[idx], Date_Fin: holRecords.Date_Fin[idx] };
+            });
+        } catch(e) {
+            dataStore.holidays = [];
+        }
+
+        await loadNotionsTable();
+        await loadSequencesTable();
+
+        if (typeof grist !== "undefined" && grist && grist.fetchTable) {
+            showLoading();
+            grist.fetchTable(function(records) {
+                dataStore.allRecords = records;
+                renderGantt();
+                hideLoading();
+            });
+        }
+    }
+
+    function initGrist() {
+        if (typeof grist === "undefined" || !grist) {
+            uiState.isDemoMode = true;
+            initData();
+        } else {
+            grist.ready({
+                requiredAccess: "full",
+                columns: COLUMN_CONFIG
+            });
+
+            grist.onRecords(function(records, mappings) {
+                if (mappings) {
+                    uiState.globalMappings = {
+                        notion: mappings.notion || "notion",
+                        notionTxt: mappings.notionTxt || null,
+                        sequence: mappings.sequence || "sequence",
+                        sequenceTxt: mappings.sequenceTxt || null,
+                        domaine: mappings.domaine || null,
+                        domaineTxt: mappings.domaineTxt || null,
+                        dateDebut: mappings.dateDebut || "dateDebut",
+                        dateFin: mappings.dateFin || "dateFin",
+                        etat: mappings.etat || "etat",
+                        etatTxt: mappings.etatTxt || null,
+                        groupe: mappings.groupe || "groupe"
+                    };
+                }
+                dataStore.allRecords = records;
+                renderGantt();
+            });
+
+            grist.onRecord(function(record, mappings) {
+                if (record && record.id) {
+                    updateBarSelection(record.id);
+                }
+            });
+
+            grist.selectedTable.getTableId().then(function(id) {
+                uiState.currentTableId = id;
+                initData();
+            });
+        }
+    }
+
+    // --- ÉCOUTEURS D'ÉVÉNEMENTS ---
+    document.addEventListener("DOMContentLoaded", function() {
+        document.getElementById("btn-view-mode").addEventListener("click", function(e) {
+            state.viewMode = (state.viewMode === "notions") ? "sequences" : "notions";
+            e.target.textContent = "👁️ Vue : " + (state.viewMode === "notions" ? "Notions" : "Séquences");
+            renderGantt();
+        });
+
+        document.getElementById("select-years").addEventListener("change", function(e) {
+            state.yearsScope = e.target.value;
+            if (!uiState.isDemoMode) grist.setOption('yearsScope', state.yearsScope);
+            renderGantt();
+        });
+        
+        document.getElementById("select-zoom").addEventListener("change", function(e) {
+            state.zoomLevel = e.target.value;
+            if (!uiState.isDemoMode) grist.setOption('zoomLevel', state.zoomLevel);
+            renderGantt();
+        });
+        
+        document.getElementById("btn-magnet").addEventListener("click", function(e) {
+            state.magnetism = !state.magnetism;
+            e.target.textContent = "🧲 Magnétisme : " + (state.magnetism ? "ON" : "OFF");
+            e.target.className = "header-btn " + (state.magnetism ? "active" : "");
+            if (!uiState.isDemoMode) grist.setOption('magnetism', state.magnetism);
+        });
+        
+        document.getElementById("toggle-cols-btn").addEventListener("click", toggleColumns);
+        document.getElementById("refresh-btn").addEventListener("click", refreshData);
+        
+        document.getElementById("modal-delete").onclick = deleteItem;
+		document.getElementById("modal-cancel").onclick = closeModal;
+        document.getElementById("modal-save").onclick = saveModal;
+        
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
+        
+        var overlay = document.getElementById("modal-overlay");
+        if (overlay) {
+            overlay.addEventListener("click", function(e) {
+                if (e.target === overlay) closeModal();
+            });
+        }
+        
+        var searchIn = document.getElementById("modal-notion-search");
+        if (searchIn) {
+            searchIn.addEventListener("input", function(e) {
+                var filterText = e.target.value.toLowerCase();
+                var notionSelect = document.getElementById("modal-notion");
+                notionSelect.innerHTML = "";
+                
+                var isSeq = state.viewMode === "sequences";
+                var itemsList = isSeq ? dataStore.sequencesList : dataStore.notionsList;
+                var refMap = isSeq ? dataStore.sequenceRefMap : dataStore.notionRefMap;
+                var colType = isSeq ? uiState.colTypes.sequence : uiState.colTypes.notion;
+                var isRefColumn = (colType && (colType.startsWith('Ref:') || colType.startsWith('RefList:'))) || Object.keys(refMap).length > 0 || (itemsList.length > 0 && typeof itemsList[0].id === "number");
+                
+                var itemsToUse = [];
+                if (itemsList.length > 0) {
+                    itemsToUse = itemsList;
+                } else {
+                    var uniqueSet = {};
+                    for (var g in dataStore.groupedTasks) {
+                        for (var k in dataStore.groupedTasks[g]) {
+                            uniqueSet[k] = true;
+                        }
+                    }
+                    var uniqueItems = Object.keys(uniqueSet).sort();
+                    itemsToUse = uniqueItems.map(function(name) {
+                        return { id: refMap[name] || name, name: name };
+                    });
+                }
+                
+                // NOUVEAU : Regroupement par domaine pour la recherche
+                var filterGroups = {};
+                for (var i = 0; i < itemsToUse.length; i++) {
+                    var el = itemsToUse[i];
+                    var elText = el.name || String(el.id);
+                    if (elText.toLowerCase().indexOf(filterText) > -1) {
+                        var domName = el.domaine || "Général";
+                        if (!filterGroups[domName]) filterGroups[domName] = [];
+                        filterGroups[domName].push({ el: el, elText: elText });
+                    }
+                }
+
+                var sortedFilterDomains = Object.keys(filterGroups).sort();
+                for (var d = 0; d < sortedFilterDomains.length; d++) {
+                    var currentDomain = sortedFilterDomains[d];
+                    
+                    // Titre du domaine en gras (inactif)
+                    var domainHeader = document.createElement("option");
+                    domainHeader.disabled = true;
+                    domainHeader.style.fontWeight = "bold";
+                    domainHeader.style.color = "#2c3e50";
+                    domainHeader.textContent = currentDomain;
+                    notionSelect.appendChild(domainHeader);
+
+                    for (var j = 0; j < filterGroups[currentDomain].length; j++) {
+                        var item = filterGroups[currentDomain][j];
+                        var opt = document.createElement("option");
+                        opt.value = isRefColumn ? item.el.id : item.elText;
+                        // Indentation forcée de la notion
+                        opt.textContent = "\u00A0\u00A0\u00A0\u00A0" + item.elText;
+                        notionSelect.appendChild(opt);
+                    }
+                }
+				
+                if (notionSelect.options.length > 0) {
+                    notionSelect.selectedIndex = 0;
+                }
+            });
+        }
+        
+        document.body.addEventListener("click", function(e) {
+            if (!e.target.closest('.gantt-bar') && uiState.selectedBar) {
+                uiState.selectedBar.classList.remove("selected");
+                uiState.selectedBar = null;
+                updateSelectionCounter();
+            }
+        });
+        
+        initGrist();
+    });
+})();
+</script>
+</body>
+</html>
