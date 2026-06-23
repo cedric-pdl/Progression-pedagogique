@@ -817,6 +817,7 @@ td.footer-dates { display: flex; align-items: center; gap: 16px; flex-wrap: wrap
     }
 
     async function loadSequencesTable() {
+        try {
             var targetTableId = await getTargetTableForColumn(uiState.globalMappings.sequence || "sequence", 'sequence');
 
             if (!targetTableId) {
