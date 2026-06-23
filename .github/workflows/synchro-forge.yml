@@ -19,5 +19,5 @@ jobs:
       - name: 2. Envoyer le code vers la Forge
         # C'est ici que la magie opère ! Remplace les MAJUSCULES par tes informations :
         run: |
-          git remote add forge https://dziubanowskicedric:${{ secrets.JETON_FORGE }}@forge.education.gouv.fr/widgets-grist-cd/public/progression_pedagogique.git
+          git remote add forge https://dziubanowskicedric:${{ secrets.JETON_FORGE }}@forge.education.gouv.fr/widgets-grist-cd/public/github.git
           git push forge main
